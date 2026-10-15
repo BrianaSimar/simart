@@ -90,6 +90,20 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+  /* ------------------------------------------------------------------ *
+   * Configuración de cuentas (Supabase).
+   * Pega aquí la "Project URL" y la clave "anon public" de tu proyecto
+   * (Supabase → Project Settings → API). La clave anon es pública por
+   * diseño: la seguridad la aplican las políticas RLS de schema.sql.
+   * Si se dejan vacías, Simart funciona en modo local (sin cuentas).
+   * ------------------------------------------------------------------ */
+  window.SIMART_CONFIG = {
+    supabaseUrl: '',
+    supabaseAnonKey: ''
+  };
+</script>
 <script>
 (() => {
   'use strict';
@@ -110,6 +124,69 @@
     const [value, setValue] = useState(() => store.get(key, initial));
     useEffect(() => store.set(key, value), [key, value]);
     return [value, setValue];
+  }
+
+  /* ================================================================== *
+   * Cloud (Supabase): auth + per-user data
+   * ================================================================== */
+  const sb = (() => {
+    try {
+      const cfg = window.SIMART_CONFIG || {};
+      if (!cfg.supabaseUrl || !cfg.supabaseAnonKey || !window.supabase) return null;
+      return window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+      });
+    } catch { return null; }
+  })();
+  const hereUrl = () => location.origin + location.pathname;
+  const USERNAME_RE = /^[A-Za-z0-9_.]{3,24}$/;
+
+  const vocabToRow = (uid, v) => ({
+    user_id: uid, id: v.id, lang: v.lang, key: v.key, surface: v.surface, deck: v.deck,
+    ipa: v.ipa, translation: v.translation, pos: v.pos, context: v.context, book: v.book,
+    saved_at: new Date(v.savedAt || Date.now()).toISOString()
+  });
+  const rowToVocab = r => ({
+    id: r.id, lang: r.lang, key: r.key, surface: r.surface || r.key, deck: r.deck,
+    ipa: r.ipa || '', translation: r.translation || '', pos: r.pos || '', context: r.context || '',
+    book: r.book || '', savedAt: Date.parse(r.saved_at) || Date.now()
+  });
+
+  function authErrorText(err) {
+    const m = String((err && err.message) || err || '').toLowerCase();
+    if (m.includes('invalid login')) return 'El email o la contraseña no son correctos.';
+    if (m.includes('email not confirmed')) return 'Todavía no has confirmado tu email. Abre el enlace que te enviamos.';
+    if (m.includes('already registered') || m.includes('already been registered')) return 'Ya existe una cuenta con ese email. Inicia sesión.';
+    if (m.includes('password should be') || m.includes('weak')) return 'La contraseña es demasiado débil. Usa al menos 8 caracteres.';
+    if (m.includes('database error saving new user')) return 'Ese nombre de usuario ya está en uso. Elige otro.';
+    if (m.includes('rate limit') || m.includes('too many')) return 'Demasiados intentos. Espera un minuto y vuelve a probar.';
+    if (m.includes('fetch') || m.includes('network') || m.includes('failed to')) return 'No hay conexión con el servidor. Revisa tu internet.';
+    return 'No se pudo completar. ' + ((err && err.message) || '');
+  }
+
+  /** Keeps a table in step with a local array: upserts changed items, deletes removed ones. */
+  function useCollectionSync({ table, items, idOf, toRow, uid, idCol = 'id', enabled, report }) {
+    const last = useRef(null);
+    const prime = useCallback(list => {
+      last.current = new Map(list.map(x => [idOf(x), JSON.stringify(x)]));
+    }, [idOf]);
+    useEffect(() => {
+      if (!enabled || !sb || !uid || last.current === null) return;
+      const prev = last.current;
+      const next = new Map(items.map(x => [idOf(x), JSON.stringify(x)]));
+      const upserts = items.filter(x => prev.get(idOf(x)) !== next.get(idOf(x)));
+      const deletes = [...prev.keys()].filter(id => !next.has(id));
+      last.current = next;
+      if (!upserts.length && !deletes.length) return;
+      report('saving');
+      const ops = [];
+      if (upserts.length) ops.push(sb.from(table).upsert(upserts.map(x => toRow(uid, x))));
+      if (deletes.length) ops.push(sb.from(table).delete().eq('user_id', uid).in(idCol, deletes));
+      Promise.all(ops)
+        .then(res => report(res.some(r => r.error) ? 'error' : 'synced'))
+        .catch(() => report('error'));
+    }, [items, enabled, uid]);
+    return prime;
   }
 
   /* ================================================================== *
@@ -192,15 +269,15 @@
   const DICT = {
     en: {
       // The Red Door (A1)
-      tom: ['tɒm','Tom','nombre propio','—','Tom is my brother.','Tom es mi hermano.'],
+      tom: ['tɑm','Tom','nombre propio','—','Tom is my brother.','Tom es mi hermano.'],
       has: ['hæz','tiene','verbo','A1','She has a dog.','Ella tiene un perro.','3.ª persona de "to have".'],
-      small: ['smɔːl','pequeño/a','adjetivo','A1','A small table.','Una mesa pequeña.'],
+      small: ['smɔl','pequeño/a','adjetivo','A1','A small table.','Una mesa pequeña.'],
       house: ['haʊs','casa','sustantivo','A1','My house is near the park.','Mi casa está cerca del parque.'],
       red: ['red','rojo/a','adjetivo','A1','A red apple.','Una manzana roja.'],
-      door: ['dɔː','puerta','sustantivo','A1','Close the door, please.','Cierra la puerta, por favor.'],
+      door: ['dɔr','puerta','sustantivo','A1','Close the door, please.','Cierra la puerta, por favor.'],
       every: ['ˈevri','cada, todos los','determinante','A1','Every day.','Todos los días.'],
-      morning: ['ˈmɔːnɪŋ','mañana','sustantivo','A1','Good morning!','¡Buenos días!'],
-      opens: ['ˈəʊpənz','abre','verbo','A1','The shop opens at nine.','La tienda abre a las nueve.'],
+      morning: ['ˈmɔrnɪŋ','mañana','sustantivo','A1','Good morning!','¡Buenos días!'],
+      opens: ['ˈoʊpənz','abre','verbo','A1','The shop opens at nine.','La tienda abre a las nueve.'],
       looks: ['lʊks','mira','verbo','A1','She looks at the sea.','Ella mira el mar.','"Look at" = mirar algo.'],
       street: ['striːt','calle','sustantivo','A1','A quiet street.','Una calle tranquila.'],
       today: ['təˈdeɪ','hoy','adverbio','A1','Today is Monday.','Hoy es lunes.'],
@@ -217,22 +294,22 @@
       you: ['juː','tú, usted; te','pronombre','A1','I love you.','Te quiero.'],
       says: ['sez','dice','verbo','A1','She says hello.','Ella dice hola.','Ojo: se pronuncia /sez/, no /seɪz/.'],
       surprised: ['səˈpraɪzd','sorprendido/a','adjetivo','A2','I was surprised.','Me sorprendí.'],
-      "can't": ['kɑːnt','no puede(n)','verbo modal','A1','I can’t swim.','No sé nadar.','Contracción de "cannot".'],
-      talk: ['tɔːk','hablar','verbo','A1','Can we talk?','¿Podemos hablar?','La "l" no se pronuncia.'],
+      "can't": ['kænt','no puede(n)','verbo modal','A1','I can’t swim.','No sé nadar.','Contracción de "cannot".'],
+      talk: ['tɔk','hablar','verbo','A1','Can we talk?','¿Podemos hablar?','La "l" no se pronuncia.'],
       // Alice (C1)
       alice: ['ˈælɪs','Alicia','nombre propio','—','Alice followed the rabbit into the garden.','Alicia siguió al conejo hasta el jardín.'],
-      was: ['wɒz','era / estaba','verbo','A1','The room was quiet.','La habitación estaba en silencio.','Pasado de "to be" (1.ª y 3.ª persona del singular).'],
+      was: ['wʌz','era / estaba','verbo','A1','The room was quiet.','La habitación estaba en silencio.','Pasado de "to be" (1.ª y 3.ª persona del singular). En EE. UU. suena «uas».'],
       beginning: ['bɪˈɡɪnɪŋ','empezando','verbo','A2','It is beginning to rain.','Está empezando a llover.','Gerundio de "to begin".'],
       to: ['tuː','a, para','preposición','A1','She went to the market.','Fue al mercado.'],
       get: ['ɡet','ponerse, volverse; conseguir','verbo','A1','Don’t get angry.','No te enojes.','Con adjetivos indica un cambio de estado: "get tired" = cansarse.'],
       very: ['ˈveri','muy','adverbio','A1','The soup is very hot.','La sopa está muy caliente.'],
-      tired: ['ˈtaɪəd','cansado/a','adjetivo','A1','I am tired after work.','Estoy cansada después del trabajo.'],
-      of: ['ɒv','de','preposición','A1','A cup of tea.','Una taza de té.'],
-      sitting: ['ˈsɪtɪŋ','sentado/a','verbo','A2','He was sitting by the window.','Estaba sentado junto a la ventana.'],
+      tired: ['ˈtaɪɚd','cansado/a','adjetivo','A1','I am tired after work.','Estoy cansada después del trabajo.'],
+      of: ['ʌv','de','preposición','A1','A cup of tea.','Una taza de té.'],
+      sitting: ['ˈsɪɾɪŋ','sentado/a','verbo','A2','He was sitting by the window.','Estaba sentado junto a la ventana.'],
       by: ['baɪ','junto a; por','preposición','A1','The house by the river.','La casa junto al río.'],
-      her: ['hɜː','su; la, a ella','determinante','A1','She lost her keys.','Ella perdió sus llaves.'],
-      sister: ['ˈsɪstə','hermana','sustantivo','A1','My sister lives in Madrid.','Mi hermana vive en Madrid.'],
-      on: ['ɒn','en, sobre','preposición','A1','The book is on the table.','El libro está sobre la mesa.','"Hurried on" = siguió adelante a toda prisa.'],
+      her: ['hɝ','su; la, a ella','determinante','A1','She lost her keys.','Ella perdió sus llaves.'],
+      sister: ['ˈsɪstɚ','hermana','sustantivo','A1','My sister lives in Madrid.','Mi hermana vive en Madrid.'],
+      on: ['ɑn','en, sobre','preposición','A1','The book is on the table.','El libro está sobre la mesa.','"Hurried on" = siguió adelante a toda prisa.'],
       the: ['ðə','el, la, los, las','determinante','A1','The sun is up.','El sol ha salido.'],
       bank: ['bæŋk','orilla (de un río)','sustantivo','B1','They had a picnic on the bank of the river.','Hicieron un pícnic en la orilla del río.','Ojo: aquí no es "banco" de dinero. El contexto decide el significado.'],
       and: ['ænd','y','conjunción','A1','Bread and butter.','Pan y mantequilla.'],
@@ -240,7 +317,7 @@
       nothing: ['ˈnʌθɪŋ','nada','pronombre','A1','There is nothing in the box.','No hay nada en la caja.'],
       do: ['duː','hacer','verbo','A1','What do you want to do?','¿Qué quieres hacer?'],
       once: ['wʌns','una vez','adverbio','A2','I visited Paris once.','Visité París una vez.','"Never once" = ni una sola vez.'],
-      or: ['ɔː','o','conjunción','A1','Tea or coffee?','¿Té o café?'],
+      or: ['ɔr','o','conjunción','A1','Tea or coffee?','¿Té o café?'],
       twice: ['twaɪs','dos veces','adverbio','A2','I called her twice.','La llamé dos veces.'],
       she: ['ʃiː','ella','pronombre','A1','She is reading.','Ella está leyendo.'],
       had: ['hæd','tenía; había','verbo','A1','She had a small garden.','Tenía un pequeño jardín.','Pasado de "to have". Con participio forma el pluscuamperfecto: "had peeped" = había echado un vistazo.'],
@@ -250,38 +327,38 @@
       reading: ['ˈriːdɪŋ','leyendo','verbo','A1','I love reading at night.','Me encanta leer por la noche.'],
       but: ['bʌt','pero','conjunción','A1','Small but strong.','Pequeño pero fuerte.'],
       it: ['ɪt','ello, lo, la','pronombre','A1','It is late.','Es tarde.'],
-      no: ['nəʊ','ningún, ninguna','determinante','A1','There is no milk.','No hay leche.'],
-      pictures: ['ˈpɪktʃəz','dibujos, ilustraciones','sustantivo','A1','The book has beautiful pictures.','El libro tiene ilustraciones preciosas.'],
-      conversations: ['ˌkɒnvəˈseɪʃənz','conversaciones, diálogos','sustantivo','A2','We had long conversations.','Tuvimos largas conversaciones.'],
+      no: ['noʊ','ningún, ninguna','determinante','A1','There is no milk.','No hay leche.'],
+      pictures: ['ˈpɪktʃɚz','dibujos, ilustraciones','sustantivo','A1','The book has beautiful pictures.','El libro tiene ilustraciones preciosas.'],
+      conversations: ['ˌkɑnvɚˈseɪʃənz','conversaciones, diálogos','sustantivo','A2','We had long conversations.','Tuvimos largas conversaciones.'],
       in: ['ɪn','en, dentro de','preposición','A1','The keys are in my bag.','Las llaves están en mi bolso.'],
-      what: ['wɒt','qué; lo que','pronombre','A1','What is your name?','¿Cómo te llamas?'],
+      what: ['wʌt','qué; lo que','pronombre','A1','What is your name?','¿Cómo te llamas?'],
       is: ['ɪz','es / está','verbo','A1','The sky is blue.','El cielo es azul.'],
       use: ['juːs','utilidad, sentido','sustantivo','B1','What is the use of waiting?','¿De qué sirve esperar?','Como sustantivo se pronuncia /juːs/; como verbo, /juːz/.'],
-      thought: ['θɔːt','pensó','verbo','A2','She thought about the question.','Pensó en la pregunta.','Pasado de "to think". "Thought it over" = lo pensó detenidamente.'],
+      thought: ['θɔt','pensó','verbo','A2','She thought about the question.','Pensó en la pregunta.','Pasado de "to think". "Thought it over" = lo pensó detenidamente.'],
       without: ['wɪˈðaʊt','sin','preposición','A2','Coffee without sugar.','Café sin azúcar.'],
-      so: ['səʊ','así que; tan','adverbio','A1','It was so cold.','Hacía tanto frío.'],
+      so: ['soʊ','así que; tan','adverbio','A1','It was so cold.','Hacía tanto frío.'],
       considering: ['kənˈsɪdərɪŋ','considerando, pensando','verbo','B1','I am considering a new job.','Estoy pensando en un trabajo nuevo.'],
-      own: ['əʊn','propio/a','adjetivo','A2','She has her own room.','Tiene su propia habitación.'],
+      own: ['oʊn','propio/a','adjetivo','A2','She has her own room.','Tiene su propia habitación.'],
       mind: ['maɪnd','mente','sustantivo','B1','Keep an open mind.','Mantén la mente abierta.'],
       as: ['æz','como; tan','conjunción','A2','As well as she could.','Lo mejor que pudo.'],
       well: ['wel','bien','adverbio','A1','She sings well.','Canta bien.'],
       could: ['kʊd','podía, pudo','verbo modal','A2','I could not sleep.','No podía dormir.'],
-      for: ['fɔː','porque; para','conjunción','A2','She stayed inside, for it was raining.','Se quedó adentro, porque llovía.','En inglés literario "for" puede significar "porque".'],
-      hot: ['hɒt','caluroso; caliente','adjetivo','A1','A hot summer day.','Un caluroso día de verano.'],
+      for: ['fɔr','porque; para','conjunción','A2','She stayed inside, for it was raining.','Se quedó adentro, porque llovía.','En inglés literario "for" puede significar "porque".'],
+      hot: ['hɑt','caluroso; caliente','adjetivo','A1','A hot summer day.','Un caluroso día de verano.'],
       day: ['deɪ','día','sustantivo','A1','Have a nice day.','Que tengas un buen día.'],
       made: ['meɪd','hizo; hacía sentir','verbo','A2','The film made me cry.','La película me hizo llorar.','Pasado de "to make". "Made her feel" = la hacía sentirse.'],
       feel: ['fiːl','sentir(se)','verbo','A1','I feel happy today.','Hoy me siento feliz.'],
       sleepy: ['ˈsliːpi','con sueño, somnoliento/a','adjetivo','A2','The baby is sleepy.','El bebé tiene sueño.'],
-      stupid: ['ˈstjuːpɪd','torpe, atontado/a','adjetivo','A2','The heat made me feel stupid.','El calor me dejó atontada.'],
-      whether: ['ˈweðə','si (para expresar duda)','conjunción','B1','I don’t know whether to stay.','No sé si quedarme.'],
-      pleasure: ['ˈpleʒə','placer, gusto','sustantivo','B1','It’s a pleasure to meet you.','Es un placer conocerte.'],
+      stupid: ['ˈstuːpɪd','torpe, atontado/a','adjetivo','A2','The heat made me feel stupid.','El calor me dejó atontada.'],
+      whether: ['ˈweðɚ','si (para expresar duda)','conjunción','B1','I don’t know whether to stay.','No sé si quedarme.'],
+      pleasure: ['ˈpleʒɚ','placer, gusto','sustantivo','B1','It’s a pleasure to meet you.','Es un placer conocerte.'],
       making: ['ˈmeɪkɪŋ','hacer, fabricar','verbo','A1','She enjoys making bread.','Le gusta hacer pan.'],
       'daisy-chain': ['ˈdeɪzi tʃeɪn','guirnalda de margaritas','sustantivo','C1','The children made a daisy-chain.','Los niños hicieron una guirnalda de margaritas.'],
       would: ['wʊd','-ría (condicional)','verbo modal','A2','It would be nice.','Sería agradable.'],
       be: ['biː','ser / estar','verbo','A1','I want to be a doctor.','Quiero ser médica.'],
-      worth: ['wɜːθ','valer la pena','adjetivo','B1','The trip was worth it.','El viaje valió la pena.'],
-      trouble: ['ˈtrʌbl','molestia, esfuerzo','sustantivo','B1','It’s not worth the trouble.','No vale la pena la molestia.'],
-      getting: ['ˈɡetɪŋ','levantarse (con "up")','verbo','A1','Getting up early is hard.','Levantarse temprano cuesta.'],
+      worth: ['wɝθ','valer la pena','adjetivo','B1','The trip was worth it.','El viaje valió la pena.'],
+      trouble: ['ˈtrʌbəl','molestia, esfuerzo','sustantivo','B1','It’s not worth the trouble.','No vale la pena la molestia.'],
+      getting: ['ˈɡeɾɪŋ','levantarse (con "up")','verbo','A1','Getting up early is hard.','Levantarse temprano cuesta.'],
       up: ['ʌp','arriba','adverbio','A1','Look up!','¡Mira arriba!'],
       picking: ['ˈpɪkɪŋ','recogiendo','verbo','A2','We spent the day picking apples.','Pasamos el día recogiendo manzanas.'],
       daisies: ['ˈdeɪziz','margaritas','sustantivo','B2','The field was full of daisies.','El campo estaba lleno de margaritas.'],
@@ -293,73 +370,73 @@
       pink: ['pɪŋk','rosado/a','adjetivo','A1','A pink dress.','Un vestido rosado.'],
       eyes: ['aɪz','ojos','sustantivo','A1','She has green eyes.','Tiene los ojos verdes.'],
       ran: ['ræn','corrió','verbo','A1','The dog ran to the door.','El perro corrió hacia la puerta.','Pasado de "to run".'],
-      close: ['kləʊs','cerca','adverbio','A2','Stay close to me.','Quédate cerca de mí.','Como adverbio se pronuncia /kləʊs/; el verbo "cerrar" es /kləʊz/.'],
-      there: ['ðeə','allí; haber (there was = había)','adverbio','A1','There was a problem.','Había un problema.'],
-      remarkable: ['rɪˈmɑːkəbl','extraordinario/a, notable','adjetivo','B2','A remarkable discovery.','Un descubrimiento extraordinario.'],
+      close: ['kloʊs','cerca','adverbio','A2','Stay close to me.','Quédate cerca de mí.','Como adverbio se pronuncia /kloʊs/; el verbo "cerrar" es /kloʊz/.'],
+      there: ['ðer','allí; haber (there was = había)','adverbio','A1','There was a problem.','Había un problema.'],
+      remarkable: ['rɪˈmɑrkəbəl','extraordinario/a, notable','adjetivo','B2','A remarkable discovery.','Un descubrimiento extraordinario.'],
       that: ['ðæt','eso; que','pronombre','A1','I like that.','Me gusta eso.'],
-      nor: ['nɔː','ni','conjunción','B2','Neither she nor I knew.','Ni ella ni yo lo sabíamos.'],
+      nor: ['nɔr','ni','conjunción','B2','Neither she nor I knew.','Ni ella ni yo lo sabíamos.'],
       did: ['dɪd','hizo; auxiliar del pasado','verbo','A1','Did you see it?','¿Lo viste?'],
       think: ['θɪŋk','pensar, creer','verbo','A1','I think so.','Creo que sí.'],
       much: ['mʌtʃ','mucho','adverbio','A1','Thank you very much.','Muchas gracias.'],
       out: ['aʊt','fuera, afuera','adverbio','A1','She went out.','Salió.','"Out of the way" = fuera de lo normal.'],
       way: ['weɪ','camino; manera','sustantivo','A1','This is the way home.','Este es el camino a casa.'],
-      hear: ['hɪə','oír','verbo','A1','Can you hear me?','¿Me oyes?'],
+      hear: ['hɪr','oír','verbo','A1','Can you hear me?','¿Me oyes?'],
       say: ['seɪ','decir','verbo','A1','What did you say?','¿Qué dijiste?'],
       itself: ['ɪtˈself','sí mismo','pronombre','B1','The door opened by itself.','La puerta se abrió sola.'],
-      oh: ['əʊ','¡oh!, ¡ay!','interjección','A1','Oh, I see.','Ah, ya veo.'],
-      dear: ['dɪə','¡vaya!, ¡ay, Dios!','interjección','A2','Oh dear, I forgot!','¡Ay, se me olvidó!','"Oh dear!" expresa preocupación. Como adjetivo significa "querido/a".'],
+      oh: ['oʊ','¡oh!, ¡ay!','interjección','A1','Oh, I see.','Ah, ya veo.'],
+      dear: ['dɪr','¡vaya!, ¡ay, Dios!','interjección','A2','Oh dear, I forgot!','¡Ay, se me olvidó!','"Oh dear!" expresa preocupación. Como adjetivo significa "querido/a".'],
       i: ['aɪ','yo','pronombre','A1','I am here.','Estoy aquí.'],
       shall: ['ʃæl','(futuro formal)','verbo modal','B2','I shall return.','Volveré.','Forma antigua o formal de "will" con "I" y "we".'],
       late: ['leɪt','tarde','adjetivo','A1','Sorry I’m late.','Perdón por llegar tarde.'],
-      over: ['ˈəʊvə','(pensar algo) a fondo','adverbio','A2','Think it over.','Piénsalo bien.'],
-      afterwards: ['ˈɑːftəwədz','después, más tarde','adverbio','B1','We went for dinner afterwards.','Después fuimos a cenar.'],
-      occurred: ['əˈkɜːd','se le ocurrió','verbo','B2','It occurred to me that she was right.','Se me ocurrió que tenía razón.'],
-      ought: ['ɔːt','debería','verbo modal','B2','You ought to rest.','Deberías descansar.'],
+      over: ['ˈoʊvɚ','(pensar algo) a fondo','adverbio','A2','Think it over.','Piénsalo bien.'],
+      afterwards: ['ˈæftɚwɚdz','después, más tarde','adverbio','B1','We went for dinner afterwards.','Después fuimos a cenar.'],
+      occurred: ['əˈkɝd','se le ocurrió','verbo','B2','It occurred to me that she was right.','Se me ocurrió que tenía razón.'],
+      ought: ['ɔt','debería','verbo modal','B2','You ought to rest.','Deberías descansar.'],
       have: ['hæv','haber; tener','verbo','A1','I have two brothers.','Tengo dos hermanos.'],
-      wondered: ['ˈwʌndəd','se asombró; se preguntó','verbo','B1','I wondered why he left.','Me pregunté por qué se fue.'],
+      wondered: ['ˈwʌndɚd','se asombró; se preguntó','verbo','B1','I wondered why he left.','Me pregunté por qué se fue.'],
       at: ['æt','a, en','preposición','A1','At home.','En casa.'],
       this: ['ðɪs','esto, este/a','pronombre','A1','This is my house.','Esta es mi casa.'],
       time: ['taɪm','momento; tiempo','sustantivo','A1','At the time, I was young.','En aquel momento, era joven.'],
-      all: ['ɔːl','todo','pronombre','A1','All is well.','Todo va bien.'],
+      all: ['ɔl','todo','pronombre','A1','All is well.','Todo va bien.'],
       seemed: ['siːmd','parecía','verbo','A2','He seemed happy.','Parecía feliz.'],
       quite: ['kwaɪt','bastante; completamente','adverbio','B1','It was quite natural.','Era de lo más natural.'],
-      natural: ['ˈnætʃrəl','natural','adjetivo','A2','A natural reaction.','Una reacción natural.'],
+      natural: ['ˈnætʃɚəl','natural','adjetivo','A2','A natural reaction.','Una reacción natural.'],
       actually: ['ˈæktʃuəli','realmente, de verdad','adverbio','B1','He actually said yes.','De verdad dijo que sí.','Falso amigo: no significa "actualmente" (currently).'],
       took: ['tʊk','sacó; tomó','verbo','A1','She took a pen out of her bag.','Sacó un bolígrafo de la cartera.','Pasado de "to take".'],
       a: ['ə','un, una','determinante','A1','A small house.','Una casa pequeña.'],
-      watch: ['wɒtʃ','reloj (de pulsera o de bolsillo)','sustantivo','A1','My watch is slow.','Mi reloj está atrasado.'],
+      watch: ['wɑtʃ','reloj (de pulsera o de bolsillo)','sustantivo','A1','My watch is slow.','Mi reloj está atrasado.'],
       its: ['ɪts','su (de una cosa o animal)','determinante','A2','The dog wagged its tail.','El perro movió la cola.'],
-      'waistcoat-pocket': ['ˈweɪskəʊt ˌpɒkɪt','bolsillo del chaleco','sustantivo','C1','He kept a coin in his waistcoat-pocket.','Guardaba una moneda en el bolsillo del chaleco.'],
+      'waistcoat-pocket': ['ˈweskɪt ˌpɑkɪt','bolsillo del chaleco','sustantivo','C1','He kept a coin in his waistcoat-pocket.','Guardaba una moneda en el bolsillo del chaleco.'],
       looked: ['lʊkt','miró','verbo','A1','She looked at the sky.','Miró al cielo.'],
       then: ['ðen','luego, entonces','adverbio','A1','First eat, then sleep.','Primero come, luego duerme.'],
-      hurried: ['ˈhʌrid','se apresuró','verbo','B1','He hurried home.','Se fue a casa a toda prisa.'],
-      started: ['ˈstɑːtɪd','se sobresaltó; empezó','verbo','A2','She started to her feet.','Se puso de pie de un salto.','"Start to one’s feet" = levantarse de un salto.'],
+      hurried: ['ˈhɝid','se apresuró','verbo','B1','He hurried home.','Se fue a casa a toda prisa.'],
+      started: ['ˈstɑrɾɪd','se sobresaltó; empezó','verbo','A2','She started to her feet.','Se puso de pie de un salto.','"Start to one’s feet" = levantarse de un salto.'],
       feet: ['fiːt','pies','sustantivo','A1','My feet hurt.','Me duelen los pies.'],
       flashed: ['flæʃt','pasó como un relámpago','verbo','B2','An idea flashed across her mind.','Una idea le cruzó la mente.'],
-      across: ['əˈkrɒs','a través de','preposición','A2','We walked across the park.','Cruzamos el parque.'],
-      never: ['ˈnevə','nunca','adverbio','A1','I never drink coffee.','Nunca tomo café.'],
-      before: ['bɪˈfɔː','antes','adverbio','A1','I have seen it before.','Lo he visto antes.'],
+      across: ['əˈkrɔs','a través de','preposición','A2','We walked across the park.','Cruzamos el parque.'],
+      never: ['ˈnevɚ','nunca','adverbio','A1','I never drink coffee.','Nunca tomo café.'],
+      before: ['bɪˈfɔr','antes','adverbio','A1','I have seen it before.','Lo he visto antes.'],
       seen: ['siːn','visto','verbo','A2','Have you seen my phone?','¿Has visto mi teléfono?'],
-      either: ['ˈaɪðə','ni... ni; o... o','determinante','B1','Either tea or coffee.','O té o café.'],
+      either: ['ˈiːðɚ','ni... ni; o... o','determinante','B1','Either tea or coffee.','O té o café.'],
       take: ['teɪk','sacar; tomar','verbo','A1','Take a seat.','Toma asiento.'],
-      burning: ['ˈbɜːnɪŋ','ardiendo','adjetivo','B1','Burning with curiosity.','Muerta de curiosidad.'],
-      curiosity: ['ˌkjʊəriˈɒsəti','curiosidad','sustantivo','B1','Curiosity killed the cat.','La curiosidad mató al gato.'],
+      burning: ['ˈbɝnɪŋ','ardiendo','adjetivo','B1','Burning with curiosity.','Muerta de curiosidad.'],
+      curiosity: ['ˌkjʊriˈɑsəɾi','curiosidad','sustantivo','B1','Curiosity killed the cat.','La curiosidad mató al gato.'],
       field: ['fiːld','campo','sustantivo','A2','Cows in the field.','Vacas en el campo.'],
-      after: ['ˈɑːftə','detrás de; después de','preposición','A1','The dog ran after the ball.','El perro corrió tras la pelota.'],
-      fortunately: ['ˈfɔːtʃənətli','afortunadamente','adverbio','B1','Fortunately, nobody was hurt.','Afortunadamente, nadie salió herido.'],
+      after: ['ˈæftɚ','detrás de; después de','preposición','A1','The dog ran after the ball.','El perro corrió tras la pelota.'],
+      fortunately: ['ˈfɔrtʃənətli','afortunadamente','adverbio','B1','Fortunately, nobody was hurt.','Afortunadamente, nadie salió herido.'],
       just: ['dʒʌst','justo','adverbio','A2','Just in time.','Justo a tiempo.'],
       see: ['siː','ver','verbo','A1','I can see the sea.','Veo el mar.'],
-      pop: ['pɒp','meterse de golpe','verbo','B2','He popped into the shop.','Se metió un momento en la tienda.'],
+      pop: ['pɑp','meterse de golpe','verbo','B2','He popped into the shop.','Se metió un momento en la tienda.'],
       down: ['daʊn','abajo','adverbio','A1','Sit down.','Siéntate.'],
-      large: ['lɑːdʒ','grande','adjetivo','A1','A large city.','Una ciudad grande.','Falso amigo: no significa "largo" (long).'],
-      'rabbit-hole': ['ˈræbɪt həʊl','madriguera de conejo','sustantivo','B2','Down the rabbit-hole.','Por la madriguera abajo.','Hoy también se usa en sentido figurado: perderse en un tema sin fin.'],
-      under: ['ˈʌndə','debajo de','preposición','A1','Under the bed.','Debajo de la cama.'],
+      large: ['lɑrdʒ','grande','adjetivo','A1','A large city.','Una ciudad grande.','Falso amigo: no significa "largo" (long).'],
+      'rabbit-hole': ['ˈræbɪt hoʊl','madriguera de conejo','sustantivo','B2','Down the rabbit-hole.','Por la madriguera abajo.','Hoy también se usa en sentido figurado: perderse en un tema sin fin.'],
+      under: ['ˈʌndɚ','debajo de','preposición','A1','Under the bed.','Debajo de la cama.'],
       hedge: ['hedʒ','seto','sustantivo','B2','A tall hedge surrounds the garden.','Un seto alto rodea el jardín.'],
-      another: ['əˈnʌðə','otro/a','determinante','A1','Another cup, please.','Otra taza, por favor.'],
-      moment: ['ˈməʊmənt','momento','sustantivo','A1','Wait a moment.','Espera un momento.'],
+      another: ['əˈnʌðɚ','otro/a','determinante','A1','Another cup, please.','Otra taza, por favor.'],
+      moment: ['ˈmoʊmənt','momento','sustantivo','A1','Wait a moment.','Espera un momento.'],
       went: ['went','fue; bajó','verbo','A1','She went home.','Se fue a casa.','Pasado de "to go". "Down went Alice" = Alicia bajó.'],
       how: ['haʊ','cómo','adverbio','A1','How are you?','¿Cómo estás?'],
-      world: ['wɜːld','mundo','sustantivo','A1','Around the world.','Alrededor del mundo.','"How in the world" = cómo demonios.'],
+      world: ['wɝld','mundo','sustantivo','A1','Around the world.','Alrededor del mundo.','"How in the world" = cómo demonios.'],
       again: ['əˈɡen','otra vez, de nuevo','adverbio','A1','Try again.','Inténtalo de nuevo.']
     },
     fr: {
@@ -410,7 +487,7 @@
    * ================================================================== */
   const BOOKS = {
     'en-red-door': {
-      lang: 'en', voice: 'en-GB', chapterIndex: 0, chapters: 6, chapterTitle: 'The Cat on the Step',
+      lang: 'en', voice: 'en-US', chapterIndex: 0, chapters: 6, chapterTitle: 'The Cat on the Step',
       paragraphs: [
         'Tom has a small house. The house has a red door. Every morning, Tom opens the door and looks at the street.',
         'Today, a cat is sitting on the step. The cat is black and very thin. Tom gives the cat some milk.',
@@ -418,7 +495,7 @@
       ]
     },
     'en-alice': {
-      lang: 'en', voice: 'en-GB', chapterIndex: 0, chapters: 12, chapterTitle: 'Down the Rabbit-Hole',
+      lang: 'en', voice: 'en-US', chapterIndex: 0, chapters: 12, chapterTitle: 'Down the Rabbit-Hole',
       paragraphs: [
         "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, 'and what is the use of a book,' thought Alice 'without pictures or conversations?'",
         "So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.",
@@ -442,17 +519,17 @@
   /* ================================================================== *
    * Phonology: IPA → approximate spelling in the reader's native language
    * ================================================================== */
-  const VOWELS = new Set(['i','iː','ɪ','e','ɛ','æ','ə','ɜː','ɜ','ʌ','a','ɑː','ɑ','ɒ','ɔː','ɔ','o','ʊ','u','uː','y','ø','œ','ɑ̃','ɛ̃','ɔ̃','œ̃','eɪ','aɪ','ɔɪ','əʊ','aʊ','ɪə','eə','ʊə']);
-  const CONSONANTS = ['tʃ','dʒ','p','b','t','d','k','ɡ','f','v','θ','ð','s','z','ʃ','ʒ','h','m','n','ŋ','l','r','ʁ','j','w','ɥ'];
+  const VOWELS = new Set(['i','iː','ɪ','e','ɛ','æ','ə','ɚ','ɝ','ɜː','ɜ','ʌ','a','ɑː','ɑ','ɒ','ɔː','ɔ','o','ʊ','u','uː','y','ø','œ','ɑ̃','ɛ̃','ɔ̃','œ̃','eɪ','aɪ','ɔɪ','oʊ','əʊ','aʊ','ɪə','eə','ʊə']);
+  const CONSONANTS = ['tʃ','dʒ','p','b','t','d','ɾ','k','ɡ','f','v','θ','ð','s','z','ʃ','ʒ','h','m','n','ŋ','l','r','ʁ','j','w','ɥ'];
   const PHONEMES = [...VOWELS, ...CONSONANTS].sort((a, b) => b.length - a.length);
   const BASE = { p: 'p', b: 'b', t: 't', d: 'd', k: 'k', f: 'f', v: 'v', m: 'm', n: 'n', l: 'l', s: 's', z: 'z' };
-  const DIPH_LATIN = { 'eɪ': 'ei', 'aɪ': 'ai', 'ɔɪ': 'oi', 'əʊ': 'ou', 'aʊ': 'au', 'ɪə': 'ie', 'eə': 'ee', 'ʊə': 'ue' };
+  const DIPH_LATIN = { 'eɪ': 'ei', 'aɪ': 'ai', 'ɔɪ': 'oi', 'oʊ': 'ou', 'əʊ': 'ou', 'aʊ': 'au', 'ɪə': 'ie', 'eə': 'ee', 'ʊə': 'ue' };
   const TH = { s: 'th', mark: true };
   const DH = { s: 'dh', mark: true };
 
   const ES_BASE = {
     ...BASE, ...DIPH_LATIN,
-    i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'e', 'ɛ': 'e', 'æ': 'a', 'ə': 'e', 'ɜː': 'e', 'ɜ': 'e', 'ʌ': 'a', a: 'a',
+    i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'e', 'ɛ': 'e', 'æ': 'a', 'ə': 'e', 'ɚ': 'er', 'ɝ': 'er', 'ɜː': 'e', 'ɜ': 'e', 'ʌ': 'a', a: 'a', 'ɾ': 'r',
     'ɑː': 'aa', 'ɑ': 'a', 'ɒ': 'o', 'ɔː': 'oo', 'ɔ': 'o', o: 'o', 'ʊ': 'u', u: 'u', 'uː': 'uu',
     y: 'ü', 'ø': 'eu', 'œ': 'eu', 'ɑ̃': 'an', 'ɛ̃': 'en', 'ɔ̃': 'on', 'œ̃': 'en',
     'ɡ': { s: 'g', soft: 'gu' }, z: 's', 'ð': 'd', 'ʃ': 'sh', 'ʒ': 'y', h: 'j', 'tʃ': 'ch', 'dʒ': 'y',
@@ -462,14 +539,14 @@
     'es-ES': { ...ES_BASE, 'θ': 'z' },
     'es-LA': { ...ES_BASE, 'θ': TH },
     en: {
-      ...BASE, i: 'ee', 'iː': 'ee', 'ɪ': 'i', e: 'e', 'ɛ': 'e', 'æ': 'a', 'ə': 'uh', 'ɜː': 'ur', 'ɜ': 'ur', 'ʌ': 'u', a: 'ah',
+      ...BASE, i: 'ee', 'iː': 'ee', 'ɪ': 'i', e: 'e', 'ɛ': 'e', 'æ': 'a', 'ə': 'uh', 'ɚ': 'er', 'ɝ': 'ur', 'ɾ': 'd', 'oʊ': 'oh', 'ɜː': 'ur', 'ɜ': 'ur', 'ʌ': 'u', a: 'ah',
       'ɑː': 'ah', 'ɑ': 'ah', 'ɒ': 'o', 'ɔː': 'aw', 'ɔ': 'o', o: 'oh', 'ʊ': 'oo', u: 'oo', 'uː': 'oo',
       y: 'ew', 'ø': 'uh', 'œ': 'uh', 'ɑ̃': 'ahn', 'ɛ̃': 'an', 'ɔ̃': 'ohn', 'œ̃': 'uhn',
       'eɪ': 'ay', 'aɪ': 'eye', 'ɔɪ': 'oy', 'əʊ': 'oh', 'aʊ': 'ow', 'ɪə': 'eer', 'eə': 'air', 'ʊə': 'oor',
       'ɡ': 'g', 'θ': 'th', 'ð': 'th', 'ʃ': 'sh', 'ʒ': 'zh', h: 'h', 'tʃ': 'ch', 'dʒ': 'j', 'ŋ': 'ng', r: 'r', 'ʁ': 'r', j: 'y', w: 'w', 'ɥ': 'w'
     },
     pt: {
-      ...BASE, ...DIPH_LATIN, 'ɔɪ': 'ói', 'əʊ': 'ôu', 'ɪə': 'ia', 'eə': 'éa', 'ʊə': 'ua',
+      ...BASE, ...DIPH_LATIN, 'ɔɪ': 'ói', 'oʊ': 'ôu', 'əʊ': 'ôu', 'ɚ': 'âr', 'ɝ': 'âr', 'ɾ': 'r', 'ɪə': 'ia', 'eə': 'éa', 'ʊə': 'ua',
       i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'ê', 'ɛ': 'é', 'æ': 'é', 'ə': 'â', 'ɜː': 'â', 'ɜ': 'â', 'ʌ': 'â', a: 'a',
       'ɑː': 'aa', 'ɑ': 'a', 'ɒ': 'ó', 'ɔː': 'óó', 'ɔ': 'ó', o: 'ô', 'ʊ': 'u', u: 'u', 'uː': 'uu',
       y: 'ü', 'ø': 'ê', 'œ': 'é', 'ɑ̃': 'ã', 'ɛ̃': 'ẽ', 'ɔ̃': 'õ', 'œ̃': 'ã',
@@ -478,6 +555,7 @@
     },
     it: {
       ...BASE, ...DIPH_LATIN,
+      'ɚ': 'er', 'ɝ': 'er', 'ɾ': 'r',
       i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'e', 'ɛ': 'è', 'æ': 'e', 'ə': 'e', 'ɜː': 'ö', 'ɜ': 'ö', 'ʌ': 'a', a: 'a',
       'ɑː': 'aa', 'ɑ': 'a', 'ɒ': 'o', 'ɔː': 'oo', 'ɔ': 'ò', o: 'o', 'ʊ': 'u', u: 'u', 'uː': 'uu',
       y: 'ü', 'ø': 'ö', 'œ': 'ö', 'ɑ̃': 'an', 'ɛ̃': 'en', 'ɔ̃': 'on', 'œ̃': 'en',
@@ -488,7 +566,8 @@
       ...BASE, i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'é', 'ɛ': 'è', 'æ': 'a', 'ə': 'e', 'ɜː': 'eu', 'ɜ': 'eu', 'ʌ': 'a', a: 'a',
       'ɑː': 'â', 'ɑ': 'a', 'ɒ': 'o', 'ɔː': 'ô', 'ɔ': 'o', o: 'ô', 'ʊ': 'ou', u: 'ou', 'uː': 'ou',
       y: 'u', 'ø': 'eu', 'œ': 'eu', 'ɑ̃': 'an', 'ɛ̃': 'in', 'ɔ̃': 'on', 'œ̃': 'un',
-      'eɪ': 'éï', 'aɪ': 'aï', 'ɔɪ': 'oï', 'əʊ': 'ôou', 'aʊ': 'aou', 'ɪə': 'ie', 'eə': 'èe', 'ʊə': 'oue',
+      'ɚ': 'eur', 'ɝ': 'eur', 'ɾ': 'd',
+      'eɪ': 'éï', 'aɪ': 'aï', 'ɔɪ': 'oï', 'oʊ': 'ôou', 'əʊ': 'ôou', 'aʊ': 'aou', 'ɪə': 'ie', 'eə': 'èe', 'ʊə': 'oue',
       'ɡ': { s: 'g', soft: 'gu' }, 'θ': TH, 'ð': DH, 'ʃ': 'ch', 'ʒ': 'j', h: 'h', 'tʃ': 'tch', 'dʒ': 'dj',
       'ŋ': 'ng', r: 'r', 'ʁ': 'r', j: 'y', w: 'ou', 'ɥ': 'u'
     }
@@ -501,6 +580,8 @@
     'æ': 'Abre la boca como para decir «a», pero intenta decir «e».',
     'ə': 'Vocal neutra y débil, con la boca relajada. Casi no se oye.',
     'ɜː': 'Vocal larga con los labios relajados: ni «e» ni «o».',
+    'ɝ': 'La «r» americana pegada a la vocal: curva la punta de la lengua hacia atrás, sin tocar el paladar y sin vibrar.',
+    'ɾ': 'En EE. UU. la «t» (y la «d») entre vocales se suaviza en un toque rápido de lengua, como la «r» de «pero».',
     'ʌ': 'Una «a» corta y cerrada que sale del centro de la boca.',
     'ʊ': 'Una «u» corta y relajada, sin apretar los labios.',
     v: 'Dientes de arriba sobre el labio de abajo, vibrando. No es «b».',
@@ -520,16 +601,17 @@
     'ː': 'Los dos puntos (ː) marcan una vocal larga: alárgala un poco.'
   };
   const NEEDS = {
-    'es-ES': ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','v','z','ʃ','ʒ','dʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː','s'],
-    'es-LA': ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','v','z','ʃ','ʒ','dʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː'],
+    'es-ES': ['θ','ð','ɪ','æ','ə','ɝ','ɾ','ɜː','ʌ','ʊ','v','z','ʃ','ʒ','dʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː','s'],
+    'es-LA': ['θ','ð','ɪ','æ','ə','ɝ','ɾ','ɜː','ʌ','ʊ','v','z','ʃ','ʒ','dʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː'],
     en: ['ʁ','y','ø','œ','nasal','ɥ'],
-    pt: ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','h','ŋ','r','ʁ','y','ø','œ','ɥ','ː'],
-    it: ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','ʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː'],
-    fr: ['θ','ð','ɪ','æ','ɜː','ʌ','ʊ','h','ŋ','r','ː']
+    pt: ['θ','ð','ɪ','æ','ə','ɝ','ɾ','ɜː','ʌ','ʊ','h','ŋ','r','ʁ','y','ø','œ','ɥ','ː'],
+    it: ['θ','ð','ɪ','æ','ə','ɝ','ɾ','ɜː','ʌ','ʊ','ʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː'],
+    fr: ['θ','ð','ɪ','æ','ɝ','ɾ','ɜː','ʌ','ʊ','h','ŋ','r','ː']
   };
   const TIP_OVERRIDE = {
     'es-ES': {
       'θ': 'Es tu «z» de España, como en «zapato». Aquí tienes ventaja.',
+      'ɾ': 'Es tu «r» de «pero». En EE. UU. «water» suena casi «uárer».',
       h: 'Mucho más suave que tu «j»: solo aire, sin raspar la garganta.',
       'ʁ': 'Se parece a tu «j» de «jamón», pero con un poco de vibración.',
       z: 'Como una «s» vibrando. No uses tu «z»: ese es otro sonido.',
@@ -540,7 +622,9 @@
       'ð': 'Pon la lengua entre los dientes y vibra. Se parece a la «d» suave de «cada».',
       h: 'Como una «j» muy suave, casi solo aire, como se dice en Venezuela y el Caribe.',
       'ʒ': 'Como la «y» de «yo» en Argentina, con vibración.',
-      'ʁ': 'En la garganta, como una gárgara suave. No es la «rr» de «perro».'
+      'ʁ': 'En la garganta, como una gárgara suave. No es la «rr» de «perro».',
+      'ɾ': 'Es tu «r» de «pero». En EE. UU. «water» suena casi «uárer» y «city», «síri».',
+      r: 'No es tu «r» ni tu «rr»: la lengua no toca el paladar ni vibra, se curva un poco hacia atrás.'
     },
     pt: {
       h: 'Como la «rr» de «carro» en Río de Janeiro: solo aire.',
@@ -599,7 +683,7 @@
     if (e.soft && next && /[eiéèêëíẽ]/.test(firstChar(table, next.p))) t = e.soft;
     return { t, mark: !!e.mark };
   }
-  const tipKey = p => (['ɑ̃','ɛ̃','ɔ̃','œ̃'].includes(p) ? 'nasal' : p === 'ɜ' ? 'ɜː' : p);
+  const tipKey = p => (['ɑ̃','ɛ̃','ɔ̃','œ̃'].includes(p) ? 'nasal' : p === 'ɜ' ? 'ɜː' : p === 'ɚ' ? 'ɝ' : p);
 
   /** Returns { words: [[{stressed, parts:[{t,mark}]}]], tips: [{ipa, spelled, text}] } or null when unsupported. */
   function respell(ipa, nativeKey, targetLang) {
@@ -674,7 +758,7 @@
   }
 
   const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
-  const VOICE_FOR = { en: 'en-GB', fr: 'fr-FR', es: 'es-ES', pt: 'pt-BR', it: 'it-IT', de: 'de-DE' };
+  const VOICE_FOR = { en: 'en-US', fr: 'fr-FR', es: 'es-ES', pt: 'pt-BR', it: 'it-IT', de: 'de-DE' };
   function speak(text, lang, rate) {
     try {
       if (!canSpeak) return;
@@ -712,6 +796,9 @@
     lock: html`<g><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></g>`,
     plus: html`<path d="M12 5v14M5 12h14" />`,
     flame: html`<path d="M12 3c1 3 5 5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-4 2.5-5 .5 2 1.5 3 2.5 3 0-3-1-5 0-8z" />`,
+    logout: html`<g><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" /><path d="M10 16l-4-4 4-4" /><path d="M6 12h10" /></g>`,
+    globe: html`<g><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17" /><path d="M12 3.5c2.5 2.5 3.5 5.5 3.5 8.5s-1 6-3.5 8.5c-2.5-2.5-3.5-5.5-3.5-8.5s1-6 3.5-8.5z" /></g>`,
+    eye: html`<g><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="2.8" /></g>`,
     settings: html`<g><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M4.2 6l2.1 2.1M17.7 15.9l2.1 2.1M2.5 12h3M18.5 12h3M4.2 18l2.1-2.1M17.7 8.1l2.1-2.1" /></g>`
   };
 
@@ -900,7 +987,57 @@
   /* ================================================================== *
    * Library (level path + suggested books)
    * ================================================================== */
-  function Library({ profile, rank, xp, streak, vocabCount, finished, onOpenBook, onEditProfile, onOpenVocab }) {
+  const SYNC_LABEL = {
+    local: ['Sin cuenta · solo en este dispositivo', 'text-muted'],
+    loading: ['Cargando tus datos…', 'text-muted'],
+    saving: ['Guardando…', 'text-muted'],
+    synced: ['Guardado en tu cuenta', 'text-ok'],
+    offline: ['Sin conexión · se guardará al volver', 'text-accent'],
+    error: ['No se pudo guardar el último cambio', 'text-accent']
+  };
+
+  function AccountMenu({ account, sync, onEditProfile, onSignOut }) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+      if (!open) return;
+      const close = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+      const esc = e => { if (e.key === 'Escape') setOpen(false); };
+      document.addEventListener('pointerdown', close);
+      document.addEventListener('keydown', esc);
+      return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', esc); };
+    }, [open]);
+    const initial = account.guest ? '?' : (account.username || account.email || '?').slice(0, 1).toUpperCase();
+    const [label, tone] = SYNC_LABEL[sync] || SYNC_LABEL.local;
+    const dot = sync === 'synced' ? 'bg-ok' : sync === 'error' || sync === 'offline' ? 'bg-accent' : 'bg-muted';
+
+    return html`
+      <div ref=${ref} className="relative">
+        <button type="button" onClick=${() => setOpen(!open)} aria-expanded=${open} aria-label="Tu cuenta"
+          className="relative grid h-10 w-10 place-items-center rounded-xl border border-line bg-surface font-read text-[15px] font-semibold text-fg transition hover:border-muted">
+          ${initial}
+          <span className=${'absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg ' + dot}></span>
+        </button>
+        ${open && html`
+          <div className="rise absolute right-0 top-12 z-30 flex w-[min(300px,calc(100vw-32px))] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+            <div className="flex flex-col gap-1 border-b border-line px-4 py-3.5">
+              <span className="truncate font-semibold text-fg">${account.guest ? 'Invitado' : '@' + account.username}</span>
+              ${!account.guest && html`<span className="truncate text-xs text-muted">${account.email}</span>`}
+              <span className=${'text-xs ' + tone}>${label}</span>
+            </div>
+            <button type="button" onClick=${() => { setOpen(false); onEditProfile(); }}
+              className="flex h-12 items-center gap-3 px-4 text-left text-sm font-semibold text-fg transition hover:bg-raised">
+              <${Icon} d=${I.globe} size=${17} /> Idiomas y pronunciación
+            </button>
+            <button type="button" onClick=${() => { setOpen(false); onSignOut(); }}
+              className="flex h-12 items-center gap-3 border-t border-line px-4 text-left text-sm font-semibold text-fg transition hover:bg-raised">
+              <${Icon} d=${I.logout} size=${17} /> ${account.guest ? 'Crear cuenta o iniciar sesión' : 'Cerrar sesión'}
+            </button>
+          </div>`}
+      </div>`;
+  }
+
+  function Library({ profile, rank, xp, streak, vocabCount, finished, onOpenBook, onEditProfile, onOpenVocab, account, sync, onSignOut }) {
     const [pending, setPending] = useState(null);
     const books = CATALOG[profile.target] || [];
     const lv = LEVELS[rank];
@@ -929,9 +1066,10 @@
                 <${Icon} d=${I.stack} size=${17} /><span className="hidden sm:inline">Vocabulario</span><span className="tnum text-accent">${vocabCount}</span>
               </button>
               <button type="button" onClick=${onEditProfile} aria-label="Editar perfil de idiomas"
-                className="flex h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3 font-mono text-xs font-medium uppercase text-fg transition hover:border-muted">
+                className="hidden h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3 font-mono text-xs font-medium uppercase text-fg transition hover:border-muted sm:flex">
                 ${profile.native}${profile.native === 'es' ? html`<span className="text-muted">-${profile.variant}</span>` : ''}<span className="text-muted">→</span><span className="text-accent">${profile.target}</span>
               </button>
+              <${AccountMenu} account=${account} sync=${sync} onEditProfile=${onEditProfile} onSignOut=${onSignOut} />
             </div>
           </div>
         </header>
@@ -1446,24 +1584,332 @@
   }
 
   /* ================================================================== *
-   * App
+   * Auth screens
    * ================================================================== */
-  function App() {
-    const [profile, setProfile] = usePersist('lt.profile', null);
-    const [view, setView] = useState(() => (store.get('lt.profile', null) ? 'library' : 'onboarding'));
+  const Brand = () => html`
+    <div className="flex items-center gap-2.5">
+      <div className="grid h-10 w-10 place-items-center rounded-[11px] bg-accent font-read text-[17px] font-semibold text-ink">S</div>
+      <span className="text-lg font-semibold tracking-tight">Simart</span>
+    </div>`;
+
+  function Splash() {
+    return html`
+      <div className="grid h-full place-items-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="grid h-12 w-12 place-items-center rounded-[13px] bg-accent font-read text-xl font-semibold text-ink">S</div>
+          <span className="text-sm text-muted">Cargando…</span>
+        </div>
+      </div>`;
+  }
+
+  function Field({ id, label, type = 'text', value, onChange, autoComplete, hint, error, children }) {
+    return html`
+      <label htmlFor=${id} className="flex flex-col gap-1.5">
+        <span className="text-sm font-semibold text-fg">${label}</span>
+        <span className="relative flex">
+          <input id=${id} type=${type} value=${value} onInput=${e => onChange(e.target.value)} autoComplete=${autoComplete}
+            autoCapitalize="none" autoCorrect="off" spellCheck="false"
+            className=${'h-12 w-full min-w-0 rounded-xl border bg-bg px-3.5 text-[16px] ' + (children ? 'pr-12 ' : '') + ' text-fg placeholder:text-muted transition ' + (error ? 'border-accent' : 'border-line focus:border-muted')} />
+          ${children}
+        </span>
+        ${error ? html`<span className="text-xs text-accent">${error}</span>` : hint ? html`<span className="text-xs text-muted">${hint}</span>` : null}
+      </label>`;
+  }
+
+  function AuthScreen({ initialMode = 'login', onGuest, onRecovered }) {
+    const [mode, setMode] = useState(initialMode);
+    const [username, setUsername] = useState('');
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [showPw, setShowPw] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const [notice, setNotice] = useState('');
+    const [userErr, setUserErr] = useState('');
+
+    const go = m => { setMode(m); setError(''); setNotice(''); setUserErr(''); };
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+    const pwOk = password.length >= 8;
+    const canSubmit = !busy && (
+      mode === 'signup' ? USERNAME_RE.test(username) && emailOk && pwOk :
+      mode === 'login' ? emailOk && password.length > 0 :
+      mode === 'reset' ? emailOk : pwOk);
+
+    const submit = async e => {
+      e.preventDefault();
+      if (!sb || !canSubmit) return;
+      setBusy(true); setError(''); setNotice('');
+      try {
+        if (mode === 'signup') {
+          const { data: free, error: rpcErr } = await sb.rpc('username_available', { candidate: username });
+          if (rpcErr) throw rpcErr;
+          if (free === false) { setUserErr('Ese nombre de usuario ya está en uso.'); return; }
+          const { data, error: err } = await sb.auth.signUp({
+            email: email.trim(), password,
+            options: { data: { username }, emailRedirectTo: hereUrl() }
+          });
+          if (err) throw err;
+          if (!data.session) {
+            go('login');
+            setNotice(`Te enviamos un email a ${email.trim()}. Ábrelo y pulsa el enlace para activar tu cuenta; después inicia sesión aquí.`);
+          }
+        } else if (mode === 'login') {
+          const { error: err } = await sb.auth.signInWithPassword({ email: email.trim(), password });
+          if (err) throw err;
+        } else if (mode === 'reset') {
+          const { error: err } = await sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: hereUrl() });
+          if (err) throw err;
+          setNotice('Si existe una cuenta con ese email, te llegará un enlace para crear una contraseña nueva.');
+        } else if (mode === 'newpass') {
+          const { error: err } = await sb.auth.updateUser({ password });
+          if (err) throw err;
+          onRecovered && onRecovered();
+        }
+      } catch (err) {
+        setError(authErrorText(err));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    const titles = {
+      login: ['Inicia sesión', 'Tu progreso y tu vocabulario te esperan en cualquier dispositivo.'],
+      signup: ['Crea tu cuenta', 'Guarda tu nivel, tus palabras y tu racha, y sigue leyendo desde el iPad, el móvil o el ordenador.'],
+      reset: ['Recupera tu contraseña', 'Escribe el email de tu cuenta y te enviaremos un enlace.'],
+      newpass: ['Elige una contraseña nueva', 'Usa al menos 8 caracteres.']
+    };
+    const submitLabel = { login: 'Iniciar sesión', signup: 'Crear cuenta', reset: 'Enviar enlace', newpass: 'Guardar contraseña' }[mode];
+
+    return html`
+      <div className="scroll-thin h-full overflow-y-auto">
+        <div className="gutter mx-auto grid min-h-full w-full max-w-5xl items-center gap-10 py-10 lg:grid-cols-[1fr_440px]">
+          <section className="flex flex-col gap-6">
+            <${Brand} />
+            <h1 className="max-w-[16ch] font-read text-[clamp(2.1rem,6vw,3.4rem)] font-semibold leading-[1.05] tracking-tight">Lee en otro idioma. Entiende cada palabra.</h1>
+            <div className="hidden max-w-md flex-col gap-3 rounded-2xl border border-line bg-surface p-5 lg:flex">
+              <span className="eyebrow">Pronunciación adaptada a tu acento</span>
+              <div className="flex items-baseline justify-between gap-4">
+                <span className="font-read text-2xl font-semibold">think</span>
+                <span className="font-mono text-sm text-muted">/θɪŋk/</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="flex flex-col gap-1 rounded-xl bg-raised p-3">
+                  <span className="text-xs text-muted">Latinoamérica</span>
+                  <span className="font-read text-lg"><span className="mark-sound">th</span>ingk</span>
+                </div>
+                <div className="flex flex-col gap-1 rounded-xl bg-raised p-3">
+                  <span className="text-xs text-muted">España</span>
+                  <span className="font-read text-lg">zingk</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="flex flex-col gap-5 rounded-2xl border border-line bg-surface p-5 sm:p-7">
+            ${(mode === 'login' || mode === 'signup') && html`
+              <div className="flex rounded-xl bg-bg p-1 text-sm font-semibold" role="tablist">
+                ${[['login', 'Iniciar sesión'], ['signup', 'Crear cuenta']].map(([m, l]) => html`
+                  <button key=${m} type="button" role="tab" aria-selected=${mode === m} onClick=${() => go(m)}
+                    className=${'flex-1 rounded-lg px-3 py-2.5 transition ' + (mode === m ? 'bg-raised text-fg' : 'text-muted hover:text-fg')}>${l}</button>`)}
+              </div>`}
+
+            <div className="flex flex-col gap-1.5">
+              <h2 className="font-read text-2xl font-semibold">${titles[mode][0]}</h2>
+              <p className="text-sm leading-relaxed text-muted">${titles[mode][1]}</p>
+            </div>
+
+            ${!sb ? html`
+              <div className="flex flex-col gap-2 rounded-xl border border-dashed border-line px-4 py-4">
+                <span className="text-sm font-semibold text-fg">Las cuentas todavía no están activadas en esta versión.</span>
+                <span className="text-sm leading-relaxed text-muted">Falta conectar la base de datos. Mientras tanto puedes usar Simart sin cuenta; tu progreso se guardará solo en este dispositivo.</span>
+              </div>` : html`
+              <form onSubmit=${submit} className="flex flex-col gap-4" noValidate>
+                ${mode === 'signup' && html`
+                  <${Field} id="auth-username" label="Nombre de usuario" value=${username} onChange=${v => { setUsername(v.trim()); setUserErr(''); }}
+                    autoComplete="username" error=${userErr || (username && !USERNAME_RE.test(username) ? 'Entre 3 y 24 caracteres: letras, números, punto o guion bajo.' : '')}
+                    hint="Así te verán en Simart. Ejemplo: briana_lee" />`}
+                ${mode !== 'newpass' && html`
+                  <${Field} id="auth-email" label="Email" type="email" value=${email} onChange=${setEmail}
+                    autoComplete="email" hint=${mode === 'signup' ? 'Lo usarás para iniciar sesión y recuperar tu contraseña.' : null} />`}
+                ${mode !== 'reset' && html`
+                  <${Field} id="auth-password" label=${mode === 'newpass' ? 'Contraseña nueva' : 'Contraseña'} type=${showPw ? 'text' : 'password'} value=${password} onChange=${setPassword}
+                    autoComplete=${mode === 'login' ? 'current-password' : 'new-password'}
+                    hint=${mode === 'login' ? null : 'Mínimo 8 caracteres.'}
+                    error=${mode !== 'login' && password && !pwOk ? `Te faltan ${8 - password.length} caracteres.` : ''}>
+                    <button type="button" onClick=${() => setShowPw(!showPw)} aria-label=${showPw ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                      className=${'absolute right-1 top-1 grid h-10 w-10 place-items-center rounded-lg transition ' + (showPw ? 'text-accent' : 'text-muted hover:text-fg')}><${Icon} d=${I.eye} /></button>
+                  <//>`}
+
+                ${error && html`<p className="rounded-xl bg-soft px-3.5 py-3 text-sm text-accent" role="alert">${error}</p>`}
+                ${notice && html`<p className="rounded-xl bg-raised px-3.5 py-3 text-sm text-fg" role="status">${notice}</p>`}
+
+                <button type="submit" disabled=${!canSubmit}
+                  className="h-12 rounded-xl bg-accent text-[15px] font-semibold text-ink transition hover:brightness-110 disabled:opacity-40">
+                  ${busy ? 'Un momento…' : submitLabel}
+                </button>
+
+                ${mode === 'login' && html`
+                  <button type="button" onClick=${() => go('reset')} className="self-start text-sm font-semibold text-muted underline-offset-2 hover:text-fg hover:underline">¿Olvidaste tu contraseña?</button>`}
+                ${mode === 'reset' && html`
+                  <button type="button" onClick=${() => go('login')} className="self-start text-sm font-semibold text-muted underline-offset-2 hover:text-fg hover:underline">Volver a iniciar sesión</button>`}
+              </form>`}
+
+            ${onGuest && mode !== 'newpass' && html`
+              <div className="flex flex-col gap-2 border-t border-line pt-4">
+                <button type="button" onClick=${onGuest}
+                  className="h-11 rounded-xl border border-line text-sm font-semibold text-fg transition hover:border-muted">Continuar sin cuenta</button>
+                <span className="text-center text-xs text-muted">Sin cuenta, tu progreso se queda solo en este dispositivo.</span>
+              </div>`}
+          </section>
+        </div>
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * Root: decides between auth, guest mode and a signed-in session
+   * ================================================================== */
+  function Root() {
+    const [session, setSession] = useState(sb ? undefined : null);
+    const [guest, setGuest] = usePersist('lt.guest', false);
+    const [recovery, setRecovery] = useState(false);
+
+    useEffect(() => {
+      if (!sb) return;
+      let sub;
+      sb.auth.getSession()
+        .then(({ data }) => setSession(data.session || null))
+        .catch(() => setSession(null));
+      try {
+        sub = sb.auth.onAuthStateChange((event, s) => {
+          if (event === 'PASSWORD_RECOVERY') setRecovery(true);
+          setSession(s || null);
+        }).data.subscription;
+      } catch { /* auth unavailable */ }
+      return () => sub && sub.unsubscribe();
+    }, []);
+
+    if (session === undefined) return html`<${Splash} />`;
+    if (recovery) return html`<${AuthScreen} initialMode="newpass" onRecovered=${() => setRecovery(false)} />`;
+    if (session) {
+      const u = session.user;
+      return html`<${Main} key=${u.id} user=${u}
+        onSignOut=${() => { sb.auth.signOut().catch(() => {}); setSession(null); }} />`;
+    }
+    if (guest) return html`<${Main} key="guest" user=${null} onSignOut=${() => setGuest(false)} />`;
+    return html`<${AuthScreen} onGuest=${() => setGuest(true)} />`;
+  }
+
+  /* ================================================================== *
+   * Main app (one instance per account; guest keeps the original keys)
+   * ================================================================== */
+  const vocabId = v => v.id;
+  const deckId = d => d.id;
+  const finishedId = b => b;
+  const deckToRow = (uid, d) => ({ user_id: uid, id: d.id, name: d.name });
+  const finishedToRow = (uid, b) => ({ user_id: uid, book_id: b });
+
+  function Main({ user, onSignOut }) {
+    const ns = user ? `lt.u.${user.id}.` : 'lt.';
+    const uid = user ? user.id : null;
+    const [profile, setProfile] = usePersist(ns + 'profile', null);
+    const [view, setView] = useState(() => (store.get(ns + 'profile', null) ? 'library' : 'onboarding'));
     const [bookId, setBookId] = useState(null);
     const [challenge, setChallenge] = useState(false);
-    const [vocab, setVocab] = usePersist('lt.vocab.v2', []);
-    const [decks, setDecks] = usePersist('lt.decks', DEFAULT_DECKS);
-    const [xp, setXp] = usePersist('lt.xp', 0);
-    const [looked, setLooked] = usePersist('lt.looked', []);
-    const [finished, setFinished] = usePersist('lt.finished', []);
-    const [streak, setStreak] = usePersist('lt.streak', { days: 0, last: null });
-    const [prefs, setPrefs] = usePersist('lt.prefs', { speed: 1, autoplay: true, size: 1 });
+    const [vocab, setVocab] = usePersist(ns + 'vocab.v2', []);
+    const [decks, setDecks] = usePersist(ns + 'decks', DEFAULT_DECKS);
+    const [xp, setXp] = usePersist(ns + 'xp', 0);
+    const [looked, setLooked] = usePersist(ns + 'looked', []);
+    const [finished, setFinished] = usePersist(ns + 'finished', []);
+    const [streak, setStreak] = usePersist(ns + 'streak', { days: 0, last: null });
+    const [prefs, setPrefs] = usePersist(ns + 'prefs', { speed: 1, autoplay: true, size: 1 });
     const [vocabOpen, setVocabOpen] = useState(false);
     const [toast, setToast] = useState(null);
+    const [sync, setSync] = useState(user ? 'loading' : 'local');
+    const [ready, setReady] = useState(!user);
+    const [cloudOn, setCloudOn] = useState(false);
+    const [username, setUsername] = useState(user ? (user.user_metadata || {}).username || '' : '');
+
+    const primeVocab = useCollectionSync({ table: 'vocab_items', items: vocab, idOf: vocabId, toRow: vocabToRow, uid, enabled: cloudOn, report: setSync });
+    const primeDecks = useCollectionSync({ table: 'decks', items: decks, idOf: deckId, toRow: deckToRow, uid, enabled: cloudOn, report: setSync });
+    const primeFinished = useCollectionSync({ table: 'finished_books', items: finished, idOf: finishedId, toRow: finishedToRow, uid, idCol: 'book_id', enabled: cloudOn, report: setSync });
+
+    // Load the account's data once after sign-in.
+    useEffect(() => {
+      if (!user || !sb) return;
+      let alive = true;
+      (async () => {
+        try {
+          const [p, v, d, f] = await Promise.all([
+            sb.from('profiles').select('*').eq('id', uid).maybeSingle(),
+            sb.from('vocab_items').select('*').eq('user_id', uid),
+            sb.from('decks').select('id,name,created_at').eq('user_id', uid).order('created_at'),
+            sb.from('finished_books').select('book_id').eq('user_id', uid)
+          ]);
+          const failed = [p, v, d, f].find(r => r.error);
+          if (failed) throw failed.error;
+          if (!alive) return;
+          const row = p.data || {};
+          let nextProfile = row.native && row.target ? { native: row.native, variant: row.variant, target: row.target, level: row.level || 0 } : null;
+          let nextVocab = (v.data || []).map(rowToVocab);
+          const cloudDecks = (d.data || []).map(x => ({ id: x.id, name: x.name }));
+          let nextDecks = cloudDecks.length ? cloudDecks : DEFAULT_DECKS;
+          let nextFinished = (f.data || []).map(x => x.book_id);
+          let nextXp = row.xp || 0;
+          let nextStreak = row.streak || { days: 0, last: null };
+          let nextLooked = Array.isArray(row.looked) ? row.looked : [];
+          let nextPrefs = { speed: 1, autoplay: true, size: 1, ...(row.prefs || {}) };
+
+          primeVocab(nextVocab); primeDecks(cloudDecks); primeFinished(nextFinished);
+
+          // First sign-in on a device that was used without an account: bring that progress along.
+          const empty = !nextProfile && nextVocab.length === 0 && nextXp === 0;
+          const guestProfile = store.get('lt.profile', null);
+          if (empty && guestProfile && !store.get('lt.imported', false)) {
+            nextProfile = guestProfile;
+            nextVocab = store.get('lt.vocab.v2', []);
+            nextDecks = store.get('lt.decks', DEFAULT_DECKS);
+            nextFinished = store.get('lt.finished', []);
+            nextXp = store.get('lt.xp', 0);
+            nextStreak = store.get('lt.streak', nextStreak);
+            nextLooked = store.get('lt.looked', []);
+            nextPrefs = store.get('lt.prefs', nextPrefs);
+            store.set('lt.imported', true);
+          }
+
+          setProfile(nextProfile); setVocab(nextVocab); setDecks(nextDecks); setFinished(nextFinished);
+          setXp(nextXp); setStreak(nextStreak); setLooked(nextLooked); setPrefs(nextPrefs);
+          if (row.username) setUsername(row.username);
+          setView(nextProfile ? 'library' : 'onboarding');
+          setSync('synced'); setCloudOn(true); setReady(true);
+        } catch {
+          if (!alive) return;
+          setSync('offline'); setReady(true);
+        }
+      })();
+      return () => { alive = false; };
+    }, []);
+
+    // Profile, XP, streak and preferences live in one row.
+    useEffect(() => {
+      if (!cloudOn) return;
+      const t = setTimeout(async () => {
+        setSync('saving');
+        try {
+          const { error } = await sb.from('profiles').update({
+            native: profile ? profile.native : null,
+            variant: profile && profile.native === 'es' ? profile.variant : null,
+            target: profile ? profile.target : null,
+            level: profile ? profile.level : 0,
+            xp, streak, looked, prefs
+          }).eq('id', uid);
+          setSync(error ? 'error' : 'synced');
+        } catch { setSync('error'); }
+      }, 700);
+      return () => clearTimeout(t);
+    }, [cloudOn, profile, xp, streak, looked, prefs]);
 
     const rank = rankFor(profile, xp);
+    const account = { guest: !user, username, email: user ? user.email : '' };
 
     useEffect(() => {
       if (!toast) return;
@@ -1489,6 +1935,8 @@
       award(40, 'capítulo completado');
     };
 
+    if (!ready) return html`<${Splash} />`;
+
     let content;
     if (view === 'onboarding' || !profile) {
       content = html`<${Onboarding} initial=${profile} onCancel=${profile ? () => setView('library') : null}
@@ -1502,7 +1950,8 @@
       content = html`
         <${Library} profile=${profile} rank=${rank} xp=${xp} streak=${streak} vocabCount=${vocab.length} finished=${finished}
           onOpenBook=${(id, isChallenge) => { setBookId(id); setChallenge(isChallenge); setView('reader'); }}
-          onEditProfile=${() => setView('onboarding')} onOpenVocab=${() => setVocabOpen(true)} />
+          onEditProfile=${() => setView('onboarding')} onOpenVocab=${() => setVocabOpen(true)}
+          account=${account} sync=${sync} onSignOut=${onSignOut} />
         <${BottomSheet} open=${vocabOpen} onClose=${() => setVocabOpen(false)} full=${true}>
           <${PanelShell} tabs=${[{ id: 'vocab', label: 'Mi vocabulario' }]} tab="vocab" setTab=${() => {}} onClose=${() => setVocabOpen(false)}>
             <${VocabPanel} vocab=${vocab} setVocab=${setVocab} decks=${decks} setDecks=${setDecks} profile=${profile} rate=${prefs.speed} />
@@ -1513,7 +1962,7 @@
     return html`${content}<${Toast} toast=${toast} />`;
   }
 
-  ReactDOM.createRoot(document.getElementById('root')).render(html`<${App} />`);
+  ReactDOM.createRoot(document.getElementById('root')).render(html`<${Root} />`);
 })();
 </script>
 
