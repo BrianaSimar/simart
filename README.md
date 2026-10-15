@@ -24,18 +24,19 @@ Aprendizaje de idiomas mediante la lectura inmersiva de libros. Pensado para iPa
 1. Crea una cuenta gratuita en [supabase.com](https://supabase.com) y un proyecto nuevo llamado `simart` (región *West EU*).
 2. En el proyecto abre **SQL Editor → New query**, pega el contenido de `supabase/schema.sql` y pulsa **Run**.
 3. En **Authentication → URL Configuration** pon como *Site URL* `https://brianasimar.github.io/simart/`.
-4. En **Project Settings → API** copia la *Project URL* y la clave *anon public*, y pégalas en `index.html`, dentro de `window.SIMART_CONFIG`.
+4. La *Project URL* y la clave pública ya están configuradas en `index.html` (`window.SIMART_CONFIG`).
 
 La clave *anon* es pública por diseño: la seguridad la aplican las políticas RLS de `schema.sql`, que impiden que un usuario lea o modifique los datos de otro. Las contraseñas las cifra y guarda Supabase Auth; nunca pasan por las tablas de Simart.
 
-## Activar las voces naturales con IA
-1. Crea una cuenta en [platform.openai.com](https://platform.openai.com), añade un método de pago y genera una clave en **API keys**. Coste orientativo: unos céntimos por cada cientos de palabras, y cada palabra se genera una sola vez gracias a la caché.
-2. En Supabase, ve a **Edge Functions → Secrets** y añade `OPENAI_API_KEY` con tu clave.
-3. En **Edge Functions → Deploy a new function → Via Editor**, llama a la función `tts`, pega el contenido de `supabase/functions/tts/index.ts` y pulsa **Deploy**.
-4. Vuelve a ejecutar `supabase/schema.sql` en el SQL Editor (crea el bucket `tts-cache`).
-5. Opcional, voz propia para la guía en español: en **Edge Functions → Secrets** añade `ELEVENLABS_API_KEY` (tu clave de ElevenLabs, en *Profile → API Keys*) y `ELEVENLABS_VOICE_ID` (el ID de tu voz clonada, en *Voices → tu voz → Copy voice ID*). Las sílabas de la guía sonarán con esa voz; el inglés sigue con Atlas o Vela.
+## Activar las voces naturales con IA (ElevenLabs)
+1. En ElevenLabs crea una clave en **Profile → API Keys**.
+2. En Supabase, ve a **Edge Functions → Secrets** y añade `ELEVENLABS_API_KEY` con esa clave.
+3. Opcional: añade `ELEVENLABS_VOICE_ID` con el ID de tu voz clonada; la guía en español sonará con tu voz.
+4. En **Edge Functions → Deploy a new function → Via Editor**, llama a la función `tts`, pega el contenido de `supabase/functions/tts/index.ts` y pulsa **Deploy**.
 
-La clave de OpenAI nunca llega al navegador: solo la usa la función en el servidor, y la función solo responde a usuarios con sesión iniciada.
+Atlas usa por defecto la voz «Brian» y Vela la voz «Matilda» de la biblioteca de ElevenLabs (inglés americano). Se pueden cambiar con los secretos `ATLAS_VOICE_ID` y `VELA_VOICE_ID`. Si prefieres OpenAI, añade `OPENAI_API_KEY` en lugar de la clave de ElevenLabs.
+
+Las claves nunca llegan al navegador: solo las usa la función en el servidor, y la función solo responde a usuarios con sesión iniciada.
 
 ## Base de datos
 | Tabla | Contenido |
