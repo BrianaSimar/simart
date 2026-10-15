@@ -9,8 +9,8 @@
 //
 // Secretos (Edge Functions → Secrets):
 //   ELEVENLABS_API_KEY    tu clave de ElevenLabs                (recomendado)
-//   ELEVENLABS_VOICE_ID   ID de tu voz clonada: la guía en español
-//                         (sílabas en tu idioma) sonará con tu voz (opcional)
+//   ELEVENLABS_VOICE_ID   ID de tu voz clonada: suena en la guía en español
+//                         y como voz «Briana» en inglés si se elige (opcional)
 //   ATLAS_VOICE_ID        opcional: otra voz de ElevenLabs para Atlas
 //   VELA_VOICE_ID         opcional: otra voz de ElevenLabs para Vela
 //   OPENAI_API_KEY        alternativa a ElevenLabs                (opcional)
@@ -77,7 +77,7 @@ Deno.serve(async req => {
   let body: { text?: string; voice?: string; accent?: string };
   try { body = await req.json(); } catch { return json(400, { error: 'JSON no válido' }); }
   const text = (body.text ?? '').trim();
-  const persona = body.voice === 'male' ? 'male' : 'female';
+  const persona = body.voice === 'male' || body.voice === 'own' ? body.voice : 'female';
   const accent = ACCENTS[body.accent ?? ''] ? body.accent! : 'en';
   if (!text || text.length > 400) return json(400, { error: 'El texto debe tener entre 1 y 400 caracteres' });
 
@@ -92,14 +92,14 @@ Deno.serve(async req => {
   if (elKey) {
     provider = 'el';
     const isSpanishGuide = accent.startsWith('es-');
-    voiceId = isSpanishGuide && ownVoice
+    voiceId = ownVoice && (persona === 'own' || isSpanishGuide)
       ? ownVoice
       : persona === 'male'
         ? (Deno.env.get('ATLAS_VOICE_ID') || EL_DEFAULT.male)
         : (Deno.env.get('VELA_VOICE_ID') || EL_DEFAULT.female);
   } else {
     provider = 'openai';
-    voiceId = OPENAI_VOICES[persona].voice;
+    voiceId = OPENAI_VOICES[persona === 'male' ? 'male' : 'female'].voice;
   }
 
   // 4. Buscar en la caché.
@@ -120,7 +120,7 @@ Deno.serve(async req => {
       })
     });
   } else {
-    const v = OPENAI_VOICES[persona];
+    const v = OPENAI_VOICES[persona === 'male' ? 'male' : 'female'];
     ai = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },

@@ -797,6 +797,11 @@
       hints: /\b(ava|samantha|allison|susan|zoe|nicky|joelle|jenny|aria|michelle|emma|sara|karen|moira|tessa|serena|kate|victoria|amélie|amelie|audrey|paulina|mónica|monica|luciana|alice|female|woman|mujer|google us english)\b/i
     }
   };
+  PERSONAS.own = {
+    id: 'own', name: 'Briana', gender: 'Voz propia',
+    traits: 'Tu propia voz clonada con IA, en inglés y en español.',
+    pitch: 1, pace: 1, hints: /^$/
+  };
   const QUALITY_RE = /(premium|enhanced|natural|neural|mejorada|améliorée|online|siri)/i;
 
   let voiceCache = [];
@@ -1057,7 +1062,7 @@
     const cloud = useCloudVoiceState();
     return html`
       <div className="grid gap-2.5 sm:grid-cols-2">
-        ${Object.values(PERSONAS).map(p => {
+        ${Object.values(PERSONAS).filter(p => p.id !== 'own' || cloud === 'ready').map(p => {
           const active = value === p.id;
           const device = pickVoice([VOICE_FOR[lang] || lang], p.id, '');
           return html`
