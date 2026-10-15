@@ -6,10 +6,10 @@ Aprendizaje de idiomas mediante la lectura inmersiva de libros. Pensado para iPa
 - **Cuentas de usuario:** registro con nombre de usuario, email y contraseña. El progreso se sincroniza entre dispositivos. También se puede usar sin cuenta (solo en el dispositivo).
 - **Onboarding:** idioma materno (con variante de español de España o Latinoamérica), idioma a aprender y nivel.
 - **Biblioteca por niveles A1–C2** como un juego: XP, rangos, racha diaria y libros de desafío.
-- **Toca una palabra:** traducción, fonética IPA y frase del libro con la anterior y la siguiente. El panel no tapa el texto: en móvil y iPad vertical es una hoja compacta que se puede ampliar, y en iPad horizontal un panel lateral.
+- **Toca una palabra:** aparece una tarjeta flotante pequeña con lo esencial (traducción, cómo suena con sílabas de tu idioma, el sonido más difícil, escuchar, velocidad y guardar). La frase se resalta en el propio libro, que se desplaza solo para que la palabra nunca quede tapada. «Más» abre la guía sílaba a sílaba, otro ejemplo y las secciones.
 - **Guía de pronunciación sílaba a sílaba:** cada sílaba suena con un sonido equivalente de tu idioma materno, con consejos para los sonidos que no existen en él, y al final la palabra completa súper lento y a tu velocidad.
-- **Voces de Simart:** Atlas (masculina, grave y cálida) y Vela (femenina, suave y clara), construidas sobre las mejores voces del dispositivo.
-- **Velocidades:** normal, lento medio, lento y súper lento. Por defecto el sonido solo se reproduce cuando el usuario lo pide.
+- **Voces de Simart con IA:** Atlas (masculina, grave y profunda, de narrador) y Vela (femenina, elegante y serena). Con cuenta iniciada suenan con voz natural generada por IA; sin conexión se usa la mejor voz del dispositivo, sin alterar su tono.
+- **Velocidades reales:** normal, lento medio, lento y súper lento. La voz natural se ralentiza conservando el tono. Por defecto el sonido solo se reproduce cuando el usuario lo pide.
 - **Inglés con acento americano** (voz en-US y fonética de EE. UU.).
 - **Vocabulario en secciones de práctica**, base del futuro juego de repaso.
 
@@ -17,7 +17,8 @@ Aprendizaje de idiomas mediante la lectura inmersiva de libros. Pensado para iPa
 | Archivo | Qué es |
 | --- | --- |
 | `index.html` | La aplicación completa (React + Tailwind, sin instalación). |
-| `supabase/schema.sql` | Base de datos: tablas, seguridad por usuario y funciones. |
+| `supabase/schema.sql` | Base de datos: tablas, seguridad por usuario, funciones y caché de audio. |
+| `supabase/functions/tts/index.ts` | Función que genera las voces naturales con IA y guarda cada audio en caché. |
 
 ## Activar las cuentas (Supabase)
 1. Crea una cuenta gratuita en [supabase.com](https://supabase.com) y un proyecto nuevo llamado `simart` (región *West EU*).
@@ -26,6 +27,14 @@ Aprendizaje de idiomas mediante la lectura inmersiva de libros. Pensado para iPa
 4. En **Project Settings → API** copia la *Project URL* y la clave *anon public*, y pégalas en `index.html`, dentro de `window.SIMART_CONFIG`.
 
 La clave *anon* es pública por diseño: la seguridad la aplican las políticas RLS de `schema.sql`, que impiden que un usuario lea o modifique los datos de otro. Las contraseñas las cifra y guarda Supabase Auth; nunca pasan por las tablas de Simart.
+
+## Activar las voces naturales con IA
+1. Crea una cuenta en [platform.openai.com](https://platform.openai.com), añade un método de pago y genera una clave en **API keys**. Coste orientativo: unos céntimos por cada cientos de palabras, y cada palabra se genera una sola vez gracias a la caché.
+2. En Supabase, ve a **Edge Functions → Secrets** y añade `OPENAI_API_KEY` con tu clave.
+3. En **Edge Functions → Deploy a new function → Via Editor**, llama a la función `tts`, pega el contenido de `supabase/functions/tts/index.ts` y pulsa **Deploy**.
+4. Vuelve a ejecutar `supabase/schema.sql` en el SQL Editor (crea el bucket `tts-cache`).
+
+La clave de OpenAI nunca llega al navegador: solo la usa la función en el servidor, y la función solo responde a usuarios con sesión iniciada.
 
 ## Base de datos
 | Tabla | Contenido |

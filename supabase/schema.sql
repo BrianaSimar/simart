@@ -157,3 +157,11 @@ drop trigger if exists profiles_touch on public.profiles;
 create trigger profiles_touch
   before update on public.profiles
   for each row execute function public.touch_updated_at();
+
+-- ---------------------------------------------------------------------
+-- 9. Caché de audio de las voces naturales (función "tts")
+--    Bucket privado: solo la función (con la service role) lee y escribe.
+-- ---------------------------------------------------------------------
+insert into storage.buckets (id, name, public)
+values ('tts-cache', 'tts-cache', false)
+on conflict (id) do nothing;

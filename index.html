@@ -57,6 +57,7 @@
   @media (hover: hover) { .word:hover { background: var(--raised); } }
   .word.is-saved { text-decoration: underline dotted var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 0.28em; }
   .word.is-match { background: var(--accent-soft); }
+  .sent-active { background: rgba(217,171,87,0.09); border-radius: 4px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   .word.is-selected { background: var(--accent); color: var(--ink); box-shadow: 0 0 0 2px var(--accent); }
   .word:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -785,14 +786,14 @@
   const PERSONAS = {
     male: {
       id: 'male', name: 'Atlas', gender: 'Voz masculina',
-      traits: 'Grave, cálida y pausada. Habla con calma y seguridad.',
-      pitch: 0.82, pace: 0.94,
+      traits: 'Grave, profunda y pausada, como un narrador de documentales.',
+      pitch: 1, pace: 1,
       hints: /\b(evan|nathan|aaron|alex|tom|fred|daniel|guy|davis|christopher|eric|roger|andrew|brian|tony|jason|ryan|thomas|jorge|diego|juan|carlos|pablo|luca|felipe|reed|rocko|grandpa|male|man|hombre)\b/i
     },
     female: {
       id: 'female', name: 'Vela', gender: 'Voz femenina',
-      traits: 'Suave, aterciopelada y clara. Cercana y fácil de seguir.',
-      pitch: 1.0, pace: 0.96,
+      traits: 'Elegante, serena y de tono medio-bajo. Clara y cálida.',
+      pitch: 1, pace: 1,
       hints: /\b(ava|samantha|allison|susan|zoe|nicky|joelle|jenny|aria|michelle|emma|sara|karen|moira|tessa|serena|kate|victoria|amélie|amelie|audrey|paulina|mónica|monica|luciana|alice|female|woman|mujer|google us english)\b/i
     }
   };
@@ -848,36 +849,118 @@
   let VOICE = { persona: 'female', deviceVoice: '' };
   const setVoicePrefs = p => { VOICE = { persona: p.voice || 'female', deviceVoice: p.deviceVoice || '' }; };
 
+  // Speeds: natural voice clips are slowed with pitch preserved; device voices
+  // only slow down reliably between 0.5 and 1, so their scale is compressed.
+  const CLOUD_RATE = { 1: 1, 0.8: 0.82, 0.6: 0.64, 0.4: 0.46 };
+  const DEVICE_RATE = { 1: 1, 0.8: 0.84, 0.6: 0.68, 0.4: 0.52 };
+  const rateFor = (table, r) => table[nearestSpeed(r)] || r;
+
+  /* ---- Natural voice (Supabase function "tts") ---- */
+  let cloudSession = null;          // set by <Main> when signed in
+  let cloudState = 'off';           // 'off' | 'ready' | 'failed'
+  const cloudListeners = new Set();
+  const setCloudState = st => { cloudState = st; cloudListeners.forEach(f => f(st)); };
+  const setCloudSession = session => {
+    cloudSession = session;
+    if (!session) setCloudState('off');
+    else if (cloudState === 'off') setCloudState('ready');
+  };
+  function useCloudVoiceState() {
+    const [st, setSt] = useState(cloudState);
+    useEffect(() => { cloudListeners.add(setSt); return () => cloudListeners.delete(setSt); }, []);
+    return st;
+  }
+  const clipCache = new Map();      // key → Promise<objectURL>
+  function fetchClip(text, accent, persona) {
+    const key = `${persona}|${accent}|${text}`;
+    if (clipCache.has(key)) return clipCache.get(key);
+    const cfg = window.SIMART_CONFIG || {};
+    const p = fetch(`${cfg.supabaseUrl}/functions/v1/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: cfg.supabaseAnonKey, Authorization: `Bearer ${cloudSession.access_token}` },
+      body: JSON.stringify({ text, voice: persona, accent })
+    }).then(async res => {
+      if (!res.ok) throw new Error('tts ' + res.status);
+      return URL.createObjectURL(await res.blob());
+    });
+    clipCache.set(key, p);
+    p.catch(() => clipCache.delete(key));
+    return p;
+  }
+  let player = null;
+  function getPlayer() {
+    if (!player) {
+      player = new Audio();
+      player.preload = 'auto';
+      try { player.preservesPitch = true; player.webkitPreservesPitch = true; player.mozPreservesPitch = true; } catch { /* ignore */ }
+    }
+    return player;
+  }
+  const accentOf = (lang, native) => (native ? native : lang === 'fr' ? 'fr' : 'en');
+  /** Warms the cache so the first tap on "Escuchar" plays instantly. */
+  function prefetchSpeech(text, lang, opts = {}) {
+    if (cloudState !== 'ready' || !cloudSession || !text) return;
+    fetchClip(text, accentOf(lang, opts.native), opts.persona || VOICE.persona).catch(() => {});
+  }
+
   let speakToken = 0;
-  /** Speaks text and resolves when it ends (or is cancelled). opts: { native, rate, persona, onBoundary } */
-  function speak(text, lang, rate, opts = {}) {
+  let pendingDone = null;
+  /** Speaks text and resolves true when it ends, false when cancelled or failed. opts: { native, persona, queue } */
+  async function speak(text, lang, rate, opts = {}) {
+    if (!text) return false;
+    const token = ++speakToken;
+    stopOutputs();
+    const persona = PERSONAS[opts.persona || VOICE.persona] ? (opts.persona || VOICE.persona) : 'female';
+    const nativeOk = !opts.native || ['es-LA', 'es-ES', 'pt', 'it'].includes(opts.native);
+    if (cloudState === 'ready' && cloudSession && nativeOk) {
+      try {
+        const url = await fetchClip(text, accentOf(lang, opts.native), persona);
+        if (token !== speakToken) return false;
+        const a = getPlayer();
+        a.src = url;
+        a.playbackRate = rateFor(CLOUD_RATE, rate || 1);
+        try { a.preservesPitch = true; a.webkitPreservesPitch = true; } catch { /* ignore */ }
+        return await new Promise(resolve => {
+          const done = ok => { a.onended = a.onerror = null; if (pendingDone === done) pendingDone = null; resolve(ok && token === speakToken); };
+          pendingDone = done;
+          a.onended = () => done(true);
+          a.onerror = () => done(false);
+          a.play().catch(() => done(false));
+        });
+      } catch {
+        if (token !== speakToken) return false;
+        setCloudState('failed');   // fall back to the device voice for this session
+      }
+    }
+    return speakDevice(text, lang, rate, opts, persona, token);
+  }
+
+  function speakDevice(text, lang, rate, opts, persona, token) {
     return new Promise(resolve => {
       try {
-        if (!canSpeak || !text) return resolve(false);
-        if (!opts.queue) { window.speechSynthesis.cancel(); }
-        const token = ++speakToken;
-        const persona = PERSONAS[opts.persona || VOICE.persona] || PERSONAS.female;
+        if (!canSpeak) return resolve(false);
         const tags = opts.native ? (NATIVE_VOICE[opts.native] || [opts.native]) : [VOICE_FOR[lang] || lang];
-        const voice = pickVoice(tags, persona.id, opts.native ? '' : VOICE.deviceVoice);
+        const voice = pickVoice(tags, persona, opts.native ? '' : VOICE.deviceVoice);
         const u = new SpeechSynthesisUtterance(text);
         if (voice) u.voice = voice;
         u.lang = voice ? voice.lang : tags[0];
-        u.rate = Math.max(0.1, Math.min(2, (rate || 1) * persona.pace));
-        // Lower the pitch further when a male persona falls back to a non-male voice.
-        const fallback = persona.id === 'male' && voice && !PERSONAS.male.hints.test(voice.name);
-        u.pitch = fallback ? 0.68 : persona.pitch;
+        u.rate = rateFor(DEVICE_RATE, rate || 1);
+        u.pitch = 1;   // altering pitch is what makes device voices sound robotic
         let done = false;
         const finish = ok => { if (!done) { done = true; resolve(ok && token === speakToken); } };
         u.onend = () => finish(true);
         u.onerror = () => finish(false);
-        if (opts.onBoundary) u.onboundary = opts.onBoundary;
         window.speechSynthesis.speak(u);
-        // Safety net: some browsers never fire onend.
         setTimeout(() => finish(true), Math.max(2500, text.length * 260 / Math.max(0.3, u.rate)));
       } catch { resolve(false); }
     });
   }
-  function stopSpeaking() { speakToken++; try { if (canSpeak) window.speechSynthesis.cancel(); } catch { /* ignore */ } }
+  function stopOutputs() {
+    try { if (canSpeak) window.speechSynthesis.cancel(); } catch { /* ignore */ }
+    try { if (player) { player.onended = player.onerror = null; player.pause(); } } catch { /* ignore */ }
+    if (pendingDone) { const f = pendingDone; pendingDone = null; f(false); }
+  }
+  function stopSpeaking() { speakToken++; stopOutputs(); }
   const wait = ms => new Promise(r => setTimeout(r, ms));
 
   const today = () => new Date().toISOString().slice(0, 10);
@@ -971,6 +1054,7 @@
 
   function VoiceCards({ value, onChange, lang }) {
     const voices = useVoices();
+    const cloud = useCloudVoiceState();
     return html`
       <div className="grid gap-2.5 sm:grid-cols-2">
         ${Object.values(PERSONAS).map(p => {
@@ -989,19 +1073,34 @@
                 className="flex h-10 items-center justify-center gap-2 rounded-xl border border-line text-sm font-semibold text-fg transition hover:border-accent hover:text-accent">
                 <${Icon} d=${I.speaker} size=${16} /> Escuchar a ${p.name}
               </button>
-              ${voices.length > 0 && html`<span className="truncate text-[11px] text-muted">En este dispositivo: ${device ? device.name : 'voz del sistema'}</span>`}
+              <span className="truncate text-[11px] text-muted">${cloud === 'ready' ? 'Voz natural con IA' : voices.length > 0 ? 'En este dispositivo: ' + (device ? device.name : 'voz del sistema') : 'Voz del dispositivo'}</span>
             </div>`;
         })}
       </div>`;
   }
 
+  const CLOUD_TEXT = {
+    ready: ['Voz natural con IA activada', 'text-ok', 'Las voces suenan humanas y la velocidad lenta conserva el tono.'],
+    failed: ['Voz natural no disponible ahora', 'text-accent', 'Se está usando la voz del dispositivo. Comprueba la conexión o la configuración de la función de voz.'],
+    off: ['Voz del dispositivo', 'text-muted', 'Inicia sesión con tu cuenta para usar las voces naturales con IA.']
+  };
+
   function AudioSettings({ prefs, setPrefs, lang, onClose }) {
     const voices = useVoices();
+    const cloud = useCloudVoiceState();
+    const [cloudLabel, cloudTone, cloudHint] = CLOUD_TEXT[cloud] || CLOUD_TEXT.off;
     const tags = [VOICE_FOR[lang] || lang];
     const options = voices.filter(v => (v.lang || '').toLowerCase().startsWith(tags[0].slice(0, 2).toLowerCase()));
     const ios = /iPad|iPhone|Macintosh/.test(navigator.userAgent);
     return html`
       <div className="flex flex-col gap-5">
+        <div className="flex items-start gap-3 rounded-xl bg-raised px-3.5 py-3">
+          <span className=${'mt-1.5 h-2 w-2 shrink-0 rounded-full ' + (cloud === 'ready' ? 'bg-ok' : cloud === 'failed' ? 'bg-accent' : 'bg-muted')}></span>
+          <span className="flex flex-col gap-0.5">
+            <span className=${'text-sm font-semibold ' + cloudTone}>${cloudLabel}</span>
+            <span className="text-xs leading-snug text-muted">${cloudHint}</span>
+          </span>
+        </div>
         <div className="flex flex-col gap-2">
           <span className="eyebrow">Tu voz guía</span>
           <${VoiceCards} value=${prefs.voice} onChange=${v => setPrefs({ ...prefs, voice: v, deviceVoice: '' })} lang=${lang} />
@@ -1014,7 +1113,7 @@
           <${Switch} id="pref-autoplay" checked=${!!prefs.autoplay} onChange=${v => setPrefs({ ...prefs, autoplay: v })}
             label="Sonido al tocar una palabra" hint="Desactivado, la palabra solo suena cuando pulsas «Escuchar»." />
         </div>
-        ${options.length > 1 && html`
+        ${cloud !== 'ready' && options.length > 1 && html`
           <label htmlFor="pref-device-voice" className="flex flex-col gap-1.5">
             <span className="text-sm font-semibold text-fg">Voz del dispositivo (avanzado)</span>
             <select id="pref-device-voice" value=${prefs.deviceVoice || ''} onChange=${e => setPrefs({ ...prefs, deviceVoice: e.target.value })}
@@ -1023,7 +1122,7 @@
               ${options.map(v => html`<option key=${v.name} value=${v.name}>${v.name} · ${v.lang}</option>`)}
             </select>
           </label>`}
-        ${ios && html`
+        ${ios && cloud !== 'ready' && html`
           <p className="rounded-xl bg-raised px-3.5 py-3 text-xs leading-relaxed text-muted">
             <span className="font-semibold text-fg">Consejo para iPad y iPhone:</span> para una voz mucho más natural, descarga una voz mejorada en Ajustes → Accesibilidad → Contenido leído → Voces → Inglés. Por ejemplo, «Evan (mejorada)» o «Ava (premium)». Simart la elegirá sola.
           </p>`}
@@ -1135,7 +1234,7 @@
   function Toast({ toast }) {
     if (!toast) return null;
     return html`
-      <div className="pointer-events-none fixed inset-x-0 z-50 flex justify-center px-4" style=${{ bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }} role="status" aria-live="polite">
+      <div className="pointer-events-none fixed inset-x-0 z-50 flex justify-center px-4" style=${{ top: 'calc(72px + env(safe-area-inset-top, 0px))' }} role="status" aria-live="polite">
         <div key=${toast.id} className="toast rounded-full border border-line bg-raised px-4 py-2 text-sm font-semibold text-fg shadow-lg">
           <span className="text-accent">${toast.xp}</span>${toast.text ? html` <span className="text-muted">· ${toast.text}</span>` : ''}
         </div>
@@ -1480,109 +1579,6 @@
   /* ================================================================== *
    * Word detail
    * ================================================================== */
-  function WordDetail({ lang, selection, profile, prefs, setPrefs, decks, savedItem, onSave }) {
-    const [playing, setPlaying] = useState(null);
-    useEffect(() => () => stopSpeaking(), [selection && selection.id]);
-    if (!selection) {
-      return html`
-        <div className="flex h-full flex-col items-start justify-center gap-3 px-5 py-8">
-          <span className="eyebrow">Diccionario contextual</span>
-          <p className="font-read text-xl leading-snug text-fg">Toca cualquier palabra del texto.</p>
-          <p className="max-w-[34ch] text-sm leading-relaxed text-muted">Verás cómo suena con los sonidos de tu idioma, su traducción y la frase donde aparece, sin perder tu lugar en el libro.</p>
-        </div>`;
-    }
-    const entry = lookup(lang, selection.key);
-    const nk = nativeKeyOf(profile);
-    const sameLang = profile.native === lang;
-    const rate = prefs.speed;
-    const play = async (id, text, r) => {
-      if (playing === id) { stopSpeaking(); setPlaying(null); return; }
-      setPlaying(id);
-      await speak(text, lang, r);
-      setPlaying(p => (p === id ? null : p));
-    };
-    const SpeakBtn = ({ id, text, label, big }) => html`
-      <button type="button" onClick=${() => play(id, text, rate)} aria-label=${label}
-        className=${'grid shrink-0 place-items-center rounded-full transition ' + (big ? 'h-12 w-12 ' : 'h-9 w-9 ') +
-          (playing === id ? 'bg-accent text-ink' : big ? 'bg-raised text-fg hover:text-accent' : 'text-muted hover:bg-bg hover:text-accent')}>
-        ${playing === id ? html`<span className="h-3 w-3 rounded-sm bg-ink"></span>` : html`<${Icon} d=${I.speaker} size=${big ? 20 : 16} />`}
-      </button>`;
-    const term = selection.surface.length > 1 ? selection.surface : selection.key;
-
-    return html`
-      <div key=${selection.id} className="rise flex flex-col gap-5 px-5 pb-8 pt-4">
-        <div className="flex items-start gap-3">
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <h2 className="min-w-0 break-words font-read text-[2.1rem] font-semibold leading-none text-fg">${selection.key}</h2>
-              ${entry && html`<span className="font-mono text-sm text-muted">/${entry.ipa}/</span>`}
-            </div>
-            <p className="font-read text-xl leading-snug text-accent">${entry ? entry.translation : 'Sin entrada en el diccionario de la demo'}</p>
-            <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              ${entry ? html`<${Chip}>${entry.pos}<//>` : html`<${Chip}>sin entrada<//>`}
-              ${entry && entry.cefr !== '—' && html`<${Chip} tone="accent">Nivel ${entry.cefr}<//>`}
-              ${selection.surface.toLowerCase() !== selection.key && html`<${Chip}>en el texto: ${selection.surface}<//>`}
-            </div>
-          </div>
-          ${canSpeak && html`<${SpeakBtn} id="word" text=${selection.key} label=${'Escuchar ' + selection.key} big=${true} />`}
-        </div>
-
-        ${canSpeak && html`<${SpeedControl} speed=${prefs.speed} setSpeed=${s => setPrefs({ ...prefs, speed: s })} />`}
-
-        ${entry && !sameLang && html`
-          <${SyllableGuide} ipa=${entry.ipa} word=${selection.key} nativeKey=${nk} lang=${lang} speed=${rate} nativeName=${langName(profile.native)} />`}
-
-        ${entry && entry.note && html`
-          <p className="rounded-xl bg-raised px-3.5 py-3 text-sm leading-relaxed text-fg"><span className="font-semibold text-accent">Ojo: </span>${entry.note}</p>`}
-
-        <div className="flex flex-col gap-3">
-          <span className="eyebrow">En el libro</span>
-          <figure className="flex flex-col gap-2 rounded-xl bg-raised p-4">
-            <blockquote className="font-read text-[15px] leading-relaxed">
-              ${selection.prev && html`<span className="text-muted">${selection.prev} </span>`}
-              <span className="text-fg"><${Highlight} text=${selection.sentence} term=${term} /></span>
-              ${selection.next && html`<span className="text-muted"> ${selection.next}</span>`}
-            </blockquote>
-            ${canSpeak && html`
-              <div className="flex items-center gap-1 border-t border-line pt-2">
-                <${SpeakBtn} id="ctx" text=${selection.sentence} label="Escuchar la frase" />
-                <span className="text-xs text-muted">Escuchar la frase</span>
-              </div>`}
-          </figure>
-          ${entry && html`
-            <span className="eyebrow pt-1">Otro ejemplo</span>
-            <figure className="flex flex-col gap-2 rounded-xl bg-raised p-4">
-              <blockquote className="font-read text-[15px] leading-relaxed text-fg"><${Highlight} text=${entry.exSrc} term=${term} /></blockquote>
-              <p className="text-sm text-muted">${entry.exEs}</p>
-              ${canSpeak && html`
-                <div className="flex items-center gap-1 border-t border-line pt-2">
-                  <${SpeakBtn} id="ex" text=${entry.exSrc} label="Escuchar el ejemplo" />
-                  <span className="text-xs text-muted">Escuchar el ejemplo</span>
-                </div>`}
-            </figure>`}
-          ${profile.native !== 'es' && html`<p className="text-xs text-muted">En la demo las traducciones están en español. La versión final las mostrará en ${langName(profile.native).toLowerCase()}.</p>`}
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="eyebrow">${savedItem ? 'Guardada en' : 'Guardar en mi vocabulario'}</span>
-            ${savedItem && html`<button type="button" onClick=${() => onSave(null)} className="text-xs font-semibold text-muted underline-offset-2 hover:text-fg hover:underline">Quitar</button>`}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            ${decks.map(d => {
-              const active = savedItem && savedItem.deck === d.id;
-              return html`
-                <button key=${d.id} type="button" onClick=${() => onSave(active ? null : d.id)} aria-pressed=${!!active}
-                  className=${'flex min-h-[44px] items-center gap-2 rounded-xl px-3.5 text-sm font-semibold transition ' +
-                    (active ? 'bg-accent text-ink' : 'border border-line text-fg hover:border-accent hover:text-accent')}>
-                  ${active ? html`<${Icon} d=${I.check} size=${16} />` : html`<${Icon} d=${I.plus} size=${16} />`}${d.name}
-                </button>`;
-            })}
-          </div>
-        </div>
-      </div>`;
-  }
-
   /* ================================================================== *
    * Saved vocabulary, grouped in practice sections
    * ================================================================== */
@@ -1724,22 +1720,6 @@
     return match;
   }
 
-  /** Bottom dock for phones and iPad portrait: no dim overlay, the book stays readable and tappable above it. */
-  function ReaderDock({ open, expanded, onToggleSize, children }) {
-    return html`
-      <section className=${'sheet fixed inset-x-0 bottom-0 z-40 mx-auto flex max-w-2xl flex-col overflow-hidden rounded-t-[22px] border border-b-0 border-line bg-surface shadow-[0_-12px_40px_rgba(0,0,0,0.45)] lg:hidden ' +
-          (open ? 'translate-y-0' : 'translate-y-[105%]')}
-        style=${{ height: expanded ? DOCK_FULL : DOCK_PEEK, transition: 'transform .38s cubic-bezier(.2,.8,.2,1), height .32s cubic-bezier(.2,.8,.2,1)', paddingBottom: 'env(safe-area-inset-bottom, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}
-        aria-hidden=${!open} aria-label="Detalle de la palabra">
-        <button type="button" onClick=${onToggleSize} className="flex h-5 shrink-0 items-center justify-center" aria-label=${expanded ? 'Reducir panel' : 'Ampliar panel'}>
-          <span className="h-1 w-10 rounded-full bg-line"></span>
-        </button>
-        <div className="min-h-0 flex-1">${children}</div>
-      </section>`;
-  }
-  const DOCK_PEEK = '46dvh';
-  const DOCK_FULL = '86dvh';
-
   function Popover({ open, onClose, children, label }) {
     const ref = useRef(null);
     useEffect(() => {
@@ -1759,6 +1739,134 @@
   }
 
   /* ================================================================== *
+   * Word card — compact, floating, keeps the book visible
+   * ================================================================== */
+  const SPEED_LABEL = { 1: 'Normal', 0.8: 'Lento medio', 0.6: 'Lento', 0.4: 'Súper lento' };
+
+  function WordCard({ lang, selection, profile, prefs, setPrefs, decks, savedItem, onSave, onClose, expanded, setExpanded, cardRef }) {
+    const [playing, setPlaying] = useState(null);
+    useEffect(() => { setPlaying(null); return () => stopSpeaking(); }, [selection.id]);
+    const entry = lookup(lang, selection.key);
+    const nk = nativeKeyOf(profile);
+    const sameLang = profile.native === lang;
+    const resp = useMemo(() => (entry && !sameLang ? respell(entry.ipa, nk, lang) : null), [selection.key, nk, lang]);
+    const syl = resp ? resp.words.flatMap((w, wi) => w.map((s, si) => ({ ...s, wordStart: wi > 0 && si === 0 }))) : [];
+    const keyTip = resp && resp.tips.length ? resp.tips[0] : null;
+    const rate = prefs.speed;
+
+    const play = async (id, text, r = rate) => {
+      if (playing === id) { stopSpeaking(); setPlaying(null); return; }
+      setPlaying(id);
+      await speak(text, lang, r);
+      setPlaying(p => (p === id ? null : p));
+    };
+    const cycleSpeed = () => {
+      const i = SPEEDS.findIndex(s => s.rate === nearestSpeed(rate));
+      const next = SPEEDS[(i + 1) % SPEEDS.length].rate;
+      setPrefs({ ...prefs, speed: next });
+    };
+    const term = selection.surface.length > 1 ? selection.surface : selection.key;
+    const btn = 'flex h-10 items-center justify-center gap-1.5 rounded-xl px-3 text-[13px] font-semibold transition';
+
+    return html`
+      <section ref=${cardRef} aria-label=${'Palabra: ' + selection.key}
+        className="rise fixed inset-x-0 z-40 mx-auto flex max-h-[min(72dvh,640px)] w-[calc(100%-24px)] max-w-[560px] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
+        style=${{ bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))' }}>
+        <div className="flex flex-col gap-2.5 px-4 pb-3 pt-3.5">
+          <div className="flex items-start gap-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="flex flex-wrap items-baseline gap-x-2.5">
+                <h2 className="break-words font-read text-[1.65rem] font-semibold leading-tight text-fg">${selection.key}</h2>
+                ${entry && html`<span className="font-mono text-[13px] text-muted">/${entry.ipa}/</span>`}
+              </div>
+              <p className="font-read text-[17px] leading-snug text-accent">
+                ${entry ? entry.translation : 'Sin entrada en el diccionario de la demo'}
+                ${entry && html`<span className="ml-2 align-middle font-ui text-[11px] font-semibold text-muted">${entry.pos}</span>`}
+              </p>
+            </div>
+            ${canSpeak && html`
+              <button type="button" onClick=${() => play('word', selection.key)} aria-label=${'Escuchar ' + selection.key}
+                className=${'grid h-12 w-12 shrink-0 place-items-center rounded-full transition ' + (playing === 'word' ? 'bg-accent text-ink' : 'bg-soft text-accent hover:brightness-125')}>
+                ${playing === 'word' ? html`<span className="h-3.5 w-3.5 rounded-sm bg-ink"></span>` : html`<${Icon} d=${I.speaker} size=${22} />`}
+              </button>`}
+            <button type="button" onClick=${onClose} aria-label="Cerrar"
+              className="-mr-1 grid h-10 w-9 shrink-0 place-items-center rounded-xl text-muted transition hover:text-fg"><${Icon} d=${I.close} size=${18} /></button>
+          </div>
+
+          ${syl.length > 0 && html`
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+                <span className="mr-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Suena</span>
+                ${syl.map((s, i) => html`
+                  <span key=${i} className=${'font-read text-[19px] leading-none ' + (s.wordStart ? 'ml-2 ' : '') + (s.stressed ? 'font-semibold text-fg underline decoration-accent decoration-2 underline-offset-[5px]' : 'text-muted')}>
+                    ${i > 0 && !s.wordStart ? html`<span className="mr-1 text-line">·</span>` : ''}${s.parts.map((p, pi) => p.mark ? html`<span key=${pi} className="mark-sound">${p.t}</span>` : p.t)}
+                  </span>`)}
+                <button type="button" onClick=${() => setExpanded(true)} className="ml-auto text-[12px] font-semibold text-accent underline-offset-2 hover:underline">Guía sílaba a sílaba</button>
+              </div>
+              ${keyTip && html`<p className="line-clamp-2 text-[13px] leading-snug text-muted"><span className="font-mono text-[11px] text-accent">/${keyTip.ipa}/</span> ${keyTip.text}</p>`}
+            </div>`}
+
+          ${entry && entry.note && html`<p className="line-clamp-2 text-[13px] leading-snug text-fg"><span className="font-semibold text-accent">Ojo: </span>${entry.note}</p>`}
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            ${canSpeak && html`
+              <button type="button" onClick=${cycleSpeed} aria-label=${'Velocidad: ' + SPEED_LABEL[nearestSpeed(rate)] + '. Toca para cambiar'}
+                className=${btn + ' border border-line text-fg hover:border-muted'}>
+                <${Icon} d=${I.slow} size=${16} /><span className="tnum">${SPEED_LABEL[nearestSpeed(rate)]}</span>
+              </button>
+              <button type="button" onClick=${() => play('ctx', selection.sentence)} aria-label="Escuchar la frase"
+                className=${btn + ' ' + (playing === 'ctx' ? 'bg-accent text-ink' : 'border border-line text-fg hover:border-muted')}>
+                <${Icon} d=${I.speaker} size=${15} /><span className="hidden min-[420px]:inline">Frase</span>
+              </button>`}
+            <button type="button" onClick=${() => (savedItem ? setExpanded(true) : onSave('unknown'))}
+              className=${btn + ' ' + (savedItem ? 'border border-line text-ok' : 'border border-line text-fg hover:border-accent hover:text-accent')}>
+              <${Icon} d=${savedItem ? I.check : I.plus} size=${15} /> ${savedItem ? 'Guardada' : 'Guardar'}
+            </button>
+            <button type="button" onClick=${() => setExpanded(!expanded)} aria-expanded=${expanded}
+              className=${btn + ' ml-auto text-muted hover:text-fg'}>
+              ${expanded ? 'Menos' : 'Más'}
+              <span className=${'inline-block transition-transform ' + (expanded ? 'rotate-90' : '-rotate-90')}><${Icon} d=${I.back} size=${14} /></span>
+            </button>
+          </div>
+        </div>
+
+        ${expanded && html`
+          <div className="scroll-thin flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain border-t border-line px-4 pb-4 pt-4">
+            ${entry && !sameLang && html`
+              <${SyllableGuide} ipa=${entry.ipa} word=${selection.key} nativeKey=${nk} lang=${lang} speed=${rate} nativeName=${langName(profile.native)} />`}
+            ${entry && html`
+              <figure className="flex flex-col gap-1.5 rounded-xl bg-raised p-3.5">
+                <figcaption className="flex items-center justify-between gap-2">
+                  <span className="eyebrow">Otro ejemplo</span>
+                  ${canSpeak && html`<button type="button" onClick=${() => play('ex', entry.exSrc)} aria-label="Escuchar el ejemplo"
+                    className=${'grid h-8 w-8 place-items-center rounded-lg transition ' + (playing === 'ex' ? 'bg-accent text-ink' : 'text-muted hover:text-accent')}><${Icon} d=${I.speaker} size=${15} /></button>`}
+                </figcaption>
+                <blockquote className="font-read text-[15px] leading-relaxed text-fg"><${Highlight} text=${entry.exSrc} term=${term} /></blockquote>
+                <p className="text-[13px] text-muted">${entry.exEs}</p>
+              </figure>`}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="eyebrow">${savedItem ? 'Guardada en' : 'Guardar en'}</span>
+                ${savedItem && html`<button type="button" onClick=${() => onSave(null)} className="text-xs font-semibold text-muted underline-offset-2 hover:text-fg hover:underline">Quitar</button>`}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                ${decks.map(d => {
+                  const active = savedItem && savedItem.deck === d.id;
+                  return html`
+                    <button key=${d.id} type="button" onClick=${() => onSave(active ? null : d.id)} aria-pressed=${!!active}
+                      className=${'flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-semibold transition ' +
+                        (active ? 'bg-accent text-ink' : 'border border-line text-fg hover:border-accent hover:text-accent')}>
+                      ${active ? html`<${Icon} d=${I.check} size=${14} />` : html`<${Icon} d=${I.plus} size=${14} />`}${d.name}
+                    </button>`;
+                })}
+              </div>
+            </div>
+            ${profile.native !== 'es' && html`<p className="text-xs text-muted">En la demo las traducciones están en español. La versión final las mostrará en ${langName(profile.native).toLowerCase()}.</p>`}
+          </div>`}
+      </section>`;
+  }
+
+  /* ================================================================== *
    * Reader
    * ================================================================== */
   function Reader({ bookId, profile, prefs, setPrefs, vocab, setVocab, decks, setDecks, looked, setLooked, finished, award, onFinish, onBack, rank, xp, challenge }) {
@@ -1766,32 +1874,16 @@
     const meta = findMeta(bookId);
     const lang = book.lang;
     const [selection, setSelection] = useState(null);
-    const [panelOpen, setPanelOpen] = useState(false);
-    const [dockFull, setDockFull] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+    const [vocabOpen, setVocabOpen] = useState(false);
     const [audioOpen, setAudioOpen] = useState(false);
-    const wide = useMedia('(min-width: 1024px)');
-    const [tab, setTab] = useState('word');
     const [progress, setProgress] = useState(0);
+    const [cardH, setCardH] = useState(0);
     const scrollRef = useRef(null);
+    const cardRef = useRef(null);
+    const cardHRef = useRef(0);
     const parsed = useMemo(() => parseBook(book.paragraphs), [book]);
     const flat = useMemo(() => parsed.paragraphs.flatMap((p, pi) => p.map((s, si) => ({ pi, si, text: s.text }))), [parsed]);
-
-    /** Keeps the tapped word visible above the dock (phones) or next to the side panel (iPad landscape). */
-    const revealWord = useCallback(id => {
-      const run = () => {
-        const main = scrollRef.current;
-        const el = main && main.querySelector(`[data-wid="${id}"]`);
-        if (!el) return;
-        const wide = window.matchMedia('(min-width: 1024px)').matches;
-        const top = el.getBoundingClientRect().top - main.getBoundingClientRect().top;
-        const visible = wide ? main.clientHeight : main.clientHeight - window.innerHeight * 0.46;
-        if (top < 24 || top > visible - 48) {
-          const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-          main.scrollTo({ top: Math.max(0, main.scrollTop + top - Math.max(60, visible * 0.32)), behavior: reduce ? 'auto' : 'smooth' });
-        }
-      };
-      setTimeout(run, 80);
-    }, []);
     const uniqueKeys = useMemo(() => {
       const s = new Set();
       parsed.paragraphs.forEach(p => p.forEach(sn => sn.tokens.forEach(t => t.type === 'word' && s.add(toKey(t.text, lang)))));
@@ -1799,6 +1891,15 @@
     }, [parsed, lang]);
     const savedKeys = useMemo(() => new Set(vocab.filter(v => v.lang === lang).map(v => v.key)), [vocab, lang]);
     const isDone = finished.includes(bookId);
+
+    // Track the card's height so the book can always scroll the tapped word above it.
+    useEffect(() => {
+      const el = cardRef.current;
+      if (!el || typeof ResizeObserver === 'undefined') { cardHRef.current = el ? el.offsetHeight : 0; setCardH(cardHRef.current); return; }
+      const ro = new ResizeObserver(() => { cardHRef.current = el.offsetHeight; setCardH(el.offsetHeight); });
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, [selection && selection.id, expanded]);
 
     const measure = useCallback(() => {
       const el = scrollRef.current;
@@ -1810,26 +1911,37 @@
       measure();
       window.addEventListener('resize', measure);
       return () => window.removeEventListener('resize', measure);
-    }, [prefs.size, panelOpen, measure]);
+    }, [prefs.size, measure]);
+
+    const close = useCallback(() => { stopSpeaking(); setSelection(null); setExpanded(false); }, []);
     useEffect(() => {
-      const onKey = e => { if (e.key === 'Escape') setPanelOpen(false); };
+      const onKey = e => { if (e.key === 'Escape') close(); };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
+    }, [close]);
+
+    const revealWord = useCallback(id => {
+      setTimeout(() => {
+        const main = scrollRef.current;
+        const el = main && main.querySelector(`[data-wid="${id}"]`);
+        if (!el) return;
+        const top = el.getBoundingClientRect().top - main.getBoundingClientRect().top;
+        const visible = main.clientHeight - (cardHRef.current || 240) - 24;
+        if (top < 24 || top > visible - 40) {
+          const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          main.scrollTo({ top: Math.max(0, main.scrollTop + top - Math.max(64, visible * 0.4)), behavior: reduce ? 'auto' : 'smooth' });
+        }
+      }, 90);
     }, []);
 
     const selectWord = (token, pi, si) => {
       const key = toKey(token.text, lang);
       const idx = flat.findIndex(f => f.pi === pi && f.si === si);
-      const sameParagraph = j => flat[j] && flat[j].pi === pi;
-      setSelection({
-        id: token.id, key, surface: token.text, sentence: flat[idx].text,
-        prev: sameParagraph(idx - 1) ? flat[idx - 1].text : '',
-        next: sameParagraph(idx + 1) ? flat[idx + 1].text : ''
-      });
-      setTab('word');
-      setPanelOpen(true);
+      if (!selection || selection.key !== key) setExpanded(false);
+      setSelection({ id: token.id, sid: `${pi}-${si}`, key, surface: token.text, sentence: flat[idx].text });
       revealWord(token.id);
       if (prefs.autoplay) speak(key, lang, prefs.speed);
+      else prefetchSpeech(key, lang);
       const lk = `${lang}:${key}`;
       if (!looked.includes(lk) && lookup(lang, key)) { setLooked([...looked, lk]); award(2, 'palabra nueva'); }
     };
@@ -1849,27 +1961,8 @@
       award(5, 'palabra guardada');
     };
 
-    const openFromVocab = v => {
-      if (v.lang !== lang) return speak(v.key, v.lang, prefs.speed);
-      setSelection({ id: 'vocab-' + v.id, key: v.key, surface: v.surface, sentence: v.context });
-      setTab('word');
-    };
-
-    const toggleVocab = () => {
-      if (panelOpen && tab === 'vocab') setPanelOpen(false);
-      else { setTab('vocab'); setPanelOpen(true); }
-    };
-
     const chapterPct = Math.round(progress * 100);
     const lvl = LEVELS[meta.level];
-
-    const panel = html`
-      <${PanelShell} tabs=${[{ id: 'word', label: 'Palabra' }, { id: 'vocab', label: 'Vocabulario', count: vocab.length }]} tab=${tab} setTab=${setTab}
-        onClose=${() => { stopSpeaking(); setPanelOpen(false); setDockFull(false); }} expanded=${dockFull} onToggleSize=${() => setDockFull(!dockFull)}>
-        ${tab === 'word'
-          ? html`<${WordDetail} lang=${lang} selection=${selection} profile=${profile} prefs=${prefs} setPrefs=${setPrefs} decks=${decks} savedItem=${savedItem} onSave=${onSave} />`
-          : html`<${VocabPanel} vocab=${vocab} setVocab=${setVocab} decks=${decks} setDecks=${setDecks} profile=${profile} rate=${prefs.speed} onOpen=${openFromVocab} />`}
-      <//>`;
 
     return html`
       <div className="flex h-full flex-col">
@@ -1904,9 +1997,8 @@
                 aria-label="Voz y audio">
                 <${Icon} d=${I.speaker} size=${17} /><span className="hidden sm:inline">${(PERSONAS[prefs.voice] || PERSONAS.female).name}</span>
               </button>
-              <button type="button" onClick=${toggleVocab} aria-pressed=${panelOpen && tab === 'vocab'}
-                className=${'flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ' +
-                  (panelOpen && tab === 'vocab' ? 'border-accent bg-soft text-accent' : 'border-line bg-surface text-fg hover:border-muted')}>
+              <button type="button" onClick=${() => setVocabOpen(true)} aria-label="Mi vocabulario"
+                className="flex h-10 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-fg transition hover:border-muted">
                 <${Icon} d=${I.stack} size=${17} /><span className="tnum text-accent">${vocab.length}</span>
               </button>
             </div>
@@ -1914,19 +2006,19 @@
           <div className="absolute inset-x-0 bottom-0 h-[2px] md:hidden"><div className="bar h-full bg-accent" style=${{ width: chapterPct + '%' }}></div></div>
         </header>
 
-        <div className="flex min-h-0 flex-1">
-          <main ref=${scrollRef} onScroll=${measure} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
-            <article className="gutter mx-auto w-full max-w-[44rem] pb-24 pt-10 sm:pt-14">
-              <div className="mb-10 flex flex-col gap-3">
-                <span className="eyebrow">${lvl.code} · ${lvl.rank} · Capítulo ${ROMAN[book.chapterIndex]} de ${ROMAN[book.chapters - 1]}</span>
-                <h1 className="font-read text-[clamp(1.9rem,5vw,2.75rem)] font-semibold leading-[1.1] tracking-tight">${book.chapterTitle}</h1>
-                <p className="text-sm text-muted">${meta.title} · ${meta.author} · ${meta.year}</p>
-              </div>
+        <main ref=${scrollRef} onScroll=${measure} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+          <article className="gutter mx-auto w-full max-w-[44rem] pb-24 pt-10 sm:pt-14">
+            <div className="mb-10 flex flex-col gap-3">
+              <span className="eyebrow">${lvl.code} · ${lvl.rank} · Capítulo ${ROMAN[book.chapterIndex]} de ${ROMAN[book.chapters - 1]}</span>
+              <h1 className="font-read text-[clamp(1.9rem,5vw,2.75rem)] font-semibold leading-[1.1] tracking-tight">${book.chapterTitle}</h1>
+              <p className="text-sm text-muted">${meta.title} · ${meta.author} · ${meta.year}</p>
+            </div>
 
-              <div className="prose-reader flex flex-col text-fg" style=${{ fontSize: SIZES[prefs.size] + 'px' }} lang=${lang}>
-                ${parsed.paragraphs.map((sentences, pi) => html`
-                  <p key=${pi}>
-                    ${sentences.map((s, si) => s.tokens.map(t => {
+            <div className="prose-reader flex flex-col text-fg" style=${{ fontSize: SIZES[prefs.size] + 'px' }} lang=${lang}>
+              ${parsed.paragraphs.map((sentences, pi) => html`
+                <p key=${pi}>
+                  ${sentences.map((s, si) => html`
+                    <span key=${si} className=${selection && selection.sid === `${pi}-${si}` ? 'sent-active' : undefined}>${s.tokens.map(t => {
                       if (t.type === 'gap') return t.text;
                       const k = toKey(t.text, lang);
                       const isSel = selection && selection.id === t.id;
@@ -1934,34 +2026,38 @@
                       return html`<span key=${t.id} data-wid=${t.id} role="button" tabIndex="0" className=${cls}
                         onClick=${() => selectWord(t, pi, si)}
                         onKeyDown=${e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectWord(t, pi, si); } }}>${t.text}</span>`;
-                    }))}
-                  </p>`)}
-              </div>
+                    })}</span>`)}
+                </p>`)}
+            </div>
 
-              <footer className="mt-14 flex flex-col gap-5 border-t border-line pt-6">
-                <span className="eyebrow">Fin del fragmento de muestra</span>
-                <dl className="grid grid-cols-3 gap-4">
-                  ${[['Palabras', parsed.words], ['Únicas', uniqueKeys.size], ['Guardadas', [...savedKeys].filter(k => uniqueKeys.has(k)).length]].map(([label, value]) => html`
-                    <div key=${label} className="flex flex-col gap-1">
-                      <dt className="text-xs text-muted">${label}</dt>
-                      <dd className="tnum font-read text-2xl font-semibold">${value}</dd>
-                    </div>`)}
-                </dl>
-                <button type="button" disabled=${isDone} onClick=${() => onFinish(bookId)}
-                  className=${'flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold transition ' + (isDone ? 'border border-line text-ok' : 'bg-accent text-ink hover:brightness-110')}>
-                  ${isDone ? html`<${Icon} d=${I.check} /> Capítulo completado` : `Marcar capítulo como leído · +${challenge ? 60 : 40} XP`}
-                </button>
-              </footer>
-              ${panelOpen && html`<div className="lg:hidden" style=${{ height: dockFull ? DOCK_FULL : DOCK_PEEK }} aria-hidden="true"></div>`}
-            </article>
-          </main>
+            <footer className="mt-14 flex flex-col gap-5 border-t border-line pt-6">
+              <span className="eyebrow">Fin del fragmento de muestra</span>
+              <dl className="grid grid-cols-3 gap-4">
+                ${[['Palabras', parsed.words], ['Únicas', uniqueKeys.size], ['Guardadas', [...savedKeys].filter(k => uniqueKeys.has(k)).length]].map(([label, value]) => html`
+                  <div key=${label} className="flex flex-col gap-1">
+                    <dt className="text-xs text-muted">${label}</dt>
+                    <dd className="tnum font-read text-2xl font-semibold">${value}</dd>
+                  </div>`)}
+              </dl>
+              <button type="button" disabled=${isDone} onClick=${() => onFinish(bookId)}
+                className=${'flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold transition ' + (isDone ? 'border border-line text-ok' : 'bg-accent text-ink hover:brightness-110')}>
+                ${isDone ? html`<${Icon} d=${I.check} /> Capítulo completado` : `Marcar capítulo como leído · +${challenge ? 60 : 40} XP`}
+              </button>
+            </footer>
+            ${selection && html`<div style=${{ height: cardH + 12 }} aria-hidden="true"></div>`}
+          </article>
+        </main>
 
-          <aside className="side hidden shrink-0 overflow-hidden border-l border-line lg:block" style=${{ width: panelOpen ? 400 : 0, borderLeftWidth: panelOpen ? 1 : 0 }} aria-hidden=${!panelOpen}>
-            <div className="h-full w-[400px]">${wide ? panel : null}</div>
-          </aside>
-        </div>
+        ${selection && html`
+          <${WordCard} key=${selection.key} lang=${lang} selection=${selection} profile=${profile} prefs=${prefs} setPrefs=${setPrefs}
+            decks=${decks} savedItem=${savedItem} onSave=${onSave} onClose=${close}
+            expanded=${expanded} setExpanded=${setExpanded} cardRef=${cardRef} />`}
 
-        <${ReaderDock} open=${panelOpen} expanded=${dockFull} onToggleSize=${() => setDockFull(!dockFull)}>${wide ? null : panel}<//>
+        <${BottomSheet} open=${vocabOpen} onClose=${() => setVocabOpen(false)} full=${true}>
+          <${PanelShell} tabs=${[{ id: 'vocab', label: 'Mi vocabulario' }]} tab="vocab" setTab=${() => {}} onClose=${() => setVocabOpen(false)}>
+            <${VocabPanel} vocab=${vocab} setVocab=${setVocab} decks=${decks} setDecks=${setDecks} profile=${profile} rate=${prefs.speed} />
+          <//>
+        <//>
 
         <${Popover} open=${audioOpen} onClose=${() => setAudioOpen(false)} label="Voz y audio">
           <${AudioSettings} prefs=${prefs} setPrefs=${setPrefs} lang=${lang} onClose=${() => setAudioOpen(false)} />
@@ -2178,7 +2274,7 @@
     if (recovery) return html`<${AuthScreen} initialMode="newpass" onRecovered=${() => setRecovery(false)} />`;
     if (session) {
       const u = session.user;
-      return html`<${Main} key=${u.id} user=${u}
+      return html`<${Main} key=${u.id} user=${u} session=${session}
         onSignOut=${() => { sb.auth.signOut().catch(() => {}); setSession(null); }} />`;
     }
     if (guest) return html`<${Main} key="guest" user=${null} onSignOut=${() => setGuest(false)} />`;
@@ -2194,7 +2290,7 @@
   const deckToRow = (uid, d) => ({ user_id: uid, id: d.id, name: d.name });
   const finishedToRow = (uid, b) => ({ user_id: uid, book_id: b });
 
-  function Main({ user, onSignOut }) {
+  function Main({ user, session, onSignOut }) {
     const ns = user ? `lt.u.${user.id}.` : 'lt.';
     const uid = user ? user.id : null;
     const [profile, setProfile] = usePersist(ns + 'profile', null);
@@ -2300,6 +2396,7 @@
       setPrefs({ ...prefs, v: 3, voice: prefs.voice || 'female', deviceVoice: prefs.deviceVoice || '', autoplay: false, speed: nearestSpeed(prefs.speed || 1) });
     }, [prefs]);
     setVoicePrefs(prefs);
+    setCloudSession(user && session ? session : null);
 
     const rank = rankFor(profile, xp);
     const account = { guest: !user, username, email: user ? user.email : '' };
