@@ -165,3 +165,8 @@ create trigger profiles_touch
 insert into storage.buckets (id, name, public)
 values ('tts-cache', 'tts-cache', false)
 on conflict (id) do nothing;
+
+-- ---------------------------------------------------------------------
+-- 10. Que la API de Supabase vea los cambios al momento
+-- ---------------------------------------------------------------------
+notify pgrst, 'reload schema';
