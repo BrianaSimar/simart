@@ -12,7 +12,7 @@
 //   ELEVENLABS_VOICE_ID   ID de tu voz clonada: suena en la guía en español
 //                         y como voz «Briana» en inglés si se elige (opcional)
 //   ATLAS_VOICE_ID        opcional: otra voz de ElevenLabs para Atlas
-//   VELA_VOICE_ID         opcional: otra voz de ElevenLabs para Vela
+//   VELA_VOICE_ID         opcional: otra voz para Vela (p. ej. tu voz clonada)
 //   OPENAI_API_KEY        alternativa a ElevenLabs                (opcional)
 // SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY los pone Supabase automáticamente.
 // =====================================================================

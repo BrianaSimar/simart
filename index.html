@@ -1062,7 +1062,7 @@
     const cloud = useCloudVoiceState();
     return html`
       <div className="grid gap-2.5 sm:grid-cols-2">
-        ${Object.values(PERSONAS).filter(p => p.id !== 'own' || cloud === 'ready').map(p => {
+        ${Object.values(PERSONAS).filter(p => p.id !== 'own').map(p => {
           const active = value === p.id;
           const device = pickVoice([VOICE_FOR[lang] || lang], p.id, '');
           return html`
