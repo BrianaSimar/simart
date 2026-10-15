@@ -1,1 +1,1521 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Simart">
+<title>Simart</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: 'var(--bg)', surface: 'var(--surface)', raised: 'var(--raised)',
+          line: 'var(--line)', fg: 'var(--fg)', muted: 'var(--muted)',
+          accent: 'var(--accent)', ink: 'var(--ink)', soft: 'var(--accent-soft)', ok: 'var(--ok)'
+        },
+        fontFamily: {
+          read: ['Literata', 'Georgia', 'Cambria', 'serif'],
+          ui: ['"Instrument Sans"', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace']
+        }
+      }
+    }
+  };
+</script>
+<style>
+  /* Layout: three views — onboarding (centered steps), library (level path + book grid), reader (text column + word panel as sidebar ≥1024px or bottom sheet).
+     Deliberately single dark theme: deep blue-slate ink with a brass accent, like a reading lamp over a page. */
+  :root {
+    --bg: #0b0d12;
+    --surface: #12151c;
+    --raised: #191d26;
+    --line: #252a35;
+    --fg: #e8e4da;
+    --muted: #8a8f9c;
+    --accent: #d9ab57;
+    --accent-soft: #2a2416;
+    --ink: #17120a;
+    --ok: #86b8a0;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--fg); font-family: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-tap-highlight-color: transparent; }
+  #root { height: 100%; }
+  .gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 
+  .prose-reader { font-family: Literata, Georgia, Cambria, serif; font-optical-sizing: auto; line-height: 1.8; hyphens: auto; -webkit-hyphens: auto; }
+  .prose-reader p + p { text-indent: 1.6em; }
+  .word { cursor: pointer; border-radius: 4px; padding: 0.04em 0.08em; margin: 0 -0.08em; transition: background-color .18s ease, color .18s ease, box-shadow .18s ease; -webkit-user-select: none; user-select: none; }
+  @media (hover: hover) { .word:hover { background: var(--raised); } }
+  .word.is-saved { text-decoration: underline dotted var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 0.28em; }
+  .word.is-match { background: var(--accent-soft); }
+  .word.is-selected { background: var(--accent); color: var(--ink); box-shadow: 0 0 0 2px var(--accent); }
+  .word:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { text-wrap: balance; }
+  mark.hl { background: transparent; color: var(--accent); font-weight: 600; }
+  .mark-sound { color: var(--accent); text-decoration: underline wavy var(--accent); text-underline-offset: 0.22em; text-decoration-thickness: 1px; }
+
+  .sheet { transition: transform .38s cubic-bezier(.2,.8,.2,1); }
+  .side { transition: width .38s cubic-bezier(.2,.8,.2,1); }
+  .fade { transition: opacity .3s ease; }
+  .bar { transition: width .5s cubic-bezier(.2,.8,.2,1); }
+  .rise { animation: rise .32s cubic-bezier(.2,.8,.2,1); }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .toast { animation: toast 1.8s ease forwards; }
+  @keyframes toast { 0% { opacity: 0; transform: translateY(8px); } 12%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-4px); } }
+  .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .no-scrollbar { scrollbar-width: none; } .no-scrollbar::-webkit-scrollbar { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .sheet, .side, .fade, .word, .bar { transition: none !important; }
+    .rise, .toast { animation: none !important; }
+  }
+</style>
+
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+<script>
+(() => {
+  'use strict';
+  const { useState, useEffect, useMemo, useRef, useCallback } = React;
+  const html = htm.bind(React.createElement);
+
+  /* ================================================================== *
+   * Persistence (per-viewer convenience; app works without it)
+   * ================================================================== */
+  const store = {
+    get(key, fallback) {
+      try { const raw = localStorage.getItem(key); return raw == null ? fallback : JSON.parse(raw); }
+      catch { return fallback; }
+    },
+    set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* unavailable */ } }
+  };
+  function usePersist(key, initial) {
+    const [value, setValue] = useState(() => store.get(key, initial));
+    useEffect(() => store.set(key, value), [key, value]);
+    return [value, setValue];
+  }
+
+  /* ================================================================== *
+   * Languages, levels and catalog
+   * ================================================================== */
+  const LANGS = [
+    ['es', 'Español', 'Español'], ['en', 'English', 'Inglés'], ['pt', 'Português', 'Portugués'],
+    ['fr', 'Français', 'Francés'], ['it', 'Italiano', 'Italiano'], ['de', 'Deutsch', 'Alemán'],
+    ['ca', 'Català', 'Catalán'], ['nl', 'Nederlands', 'Neerlandés'], ['pl', 'Polski', 'Polaco'],
+    ['tr', 'Türkçe', 'Turco'], ['ru', 'Русский', 'Ruso'], ['ar', 'العربية', 'Árabe'],
+    ['hi', 'हिन्दी', 'Hindi'], ['zh', '中文', 'Chino'], ['ja', '日本語', 'Japonés'], ['ko', '한국어', 'Coreano']
+  ].map(([code, native, es]) => ({ code, native, es }));
+  const langName = code => (LANGS.find(l => l.code === code) || { es: code }).es;
+
+  const LEVELS = [
+    { code: 'A1', rank: 'Aprendiz', desc: 'Entiendes palabras sueltas y frases muy simples.' },
+    { code: 'A2', rank: 'Explorador', desc: 'Lees textos cortos sobre temas cotidianos.' },
+    { code: 'B1', rank: 'Viajero', desc: 'Sigues una historia sencilla sin parar a cada línea.' },
+    { code: 'B2', rank: 'Lector', desc: 'Lees novelas con ayuda puntual del diccionario.' },
+    { code: 'C1', rank: 'Erudito', desc: 'Disfrutas clásicos con vocabulario rico.' },
+    { code: 'C2', rank: 'Maestro', desc: 'Lees cualquier texto, incluso literatura antigua.' }
+  ];
+  const XP_PER_LEVEL = 250;
+  const LT = 'Simart Originals';
+
+  const CATALOG = {
+    en: [
+      { id: 'en-red-door', title: 'The Red Door', author: LT, year: 2026, level: 0, readable: true, blurb: 'Un gato aparece en la puerta de Tom. Frases cortas en presente.' },
+      { id: 'en-aesop', title: "Aesop's Fables", author: 'Esopo · trad. G. F. Townsend', year: 1867, level: 1, blurb: 'Fábulas breves con moraleja y vocabulario básico.' },
+      { id: 'en-oz', title: 'The Wonderful Wizard of Oz', author: 'L. Frank Baum', year: 1900, level: 2, blurb: 'Aventura clara y lineal, ideal para ganar fluidez.' },
+      { id: 'en-holmes', title: 'The Adventures of Sherlock Holmes', author: 'Arthur Conan Doyle', year: 1892, level: 3, blurb: 'Relatos de misterio con diálogos ágiles.' },
+      { id: 'en-alice', title: "Alice's Adventures in Wonderland", author: 'Lewis Carroll', year: 1865, level: 4, readable: true, blurb: 'Juegos de palabras e inglés victoriano.' },
+      { id: 'en-pride', title: 'Pride and Prejudice', author: 'Jane Austen', year: 1813, level: 5, blurb: 'Ironía fina y frases largas del siglo XIX.' }
+    ],
+    fr: [
+      { id: 'fr-paris', title: 'Petites scènes de Paris', author: LT, year: 2026, level: 0, blurb: 'Escenas cotidianas en presente.' },
+      { id: 'fr-port', title: 'Le Port du matin', author: LT, year: 2026, level: 1, readable: true, blurb: 'Una mañana junto al mar. Primer contacto con el passé simple.' },
+      { id: 'fr-verne', title: 'Le Tour du monde en quatre-vingts jours', author: 'Jules Verne', year: 1872, level: 2, blurb: 'Una vuelta al mundo contra el reloj.' },
+      { id: 'fr-dumas', title: 'Les Trois Mousquetaires', author: 'Alexandre Dumas', year: 1844, level: 3, blurb: 'Aventura de capa y espada con mucho diálogo.' },
+      { id: 'fr-bovary', title: 'Madame Bovary', author: 'Gustave Flaubert', year: 1857, level: 4, blurb: 'Prosa precisa y descripciones largas.' },
+      { id: 'fr-proust', title: 'Du côté de chez Swann', author: 'Marcel Proust', year: 1913, level: 5, blurb: 'Frases larguísimas y memoria íntima.' }
+    ],
+    es: [
+      { id: 'es-mercado', title: 'Un día en el mercado', author: LT, year: 2026, level: 0, blurb: 'Comprar, preguntar precios y saludar.' },
+      { id: 'es-samaniego', title: 'Fábulas', author: 'Félix María de Samaniego', year: 1781, level: 1, blurb: 'Fábulas en verso, cortas y memorables.' },
+      { id: 'es-becquer', title: 'Leyendas', author: 'Gustavo Adolfo Bécquer', year: 1871, level: 2, blurb: 'Relatos de misterio del Romanticismo.' },
+      { id: 'es-marianela', title: 'Marianela', author: 'Benito Pérez Galdós', year: 1878, level: 3, blurb: 'Novela breve y emotiva.' },
+      { id: 'es-regenta', title: 'La Regenta', author: 'Leopoldo Alas «Clarín»', year: 1884, level: 4, blurb: 'Gran novela realista, rica en matices.' },
+      { id: 'es-quijote', title: 'Don Quijote de la Mancha', author: 'Miguel de Cervantes', year: 1605, level: 5, blurb: 'El clásico, con español del Siglo de Oro.' }
+    ],
+    pt: [
+      { id: 'pt-lisboa', title: 'Uma tarde em Lisboa', author: LT, year: 2026, level: 0, blurb: 'Pasear, pedir un café y orientarse.' },
+      { id: 'pt-junqueiro', title: 'Contos para a Infância', author: 'Guerra Junqueiro', year: 1877, level: 1, blurb: 'Cuentos infantiles de lenguaje sencillo.' },
+      { id: 'pt-cartomante', title: 'A Cartomante', author: 'Machado de Assis', year: 1884, level: 2, blurb: 'Un relato corto con final inesperado.' },
+      { id: 'pt-cortico', title: 'O Cortiço', author: 'Aluísio Azevedo', year: 1890, level: 3, blurb: 'La vida en una vecindad de Río.' },
+      { id: 'pt-casmurro', title: 'Dom Casmurro', author: 'Machado de Assis', year: 1899, level: 4, blurb: 'Un narrador poco fiable y mucha ironía.' },
+      { id: 'pt-lusiadas', title: 'Os Lusíadas', author: 'Luís de Camões', year: 1572, level: 5, blurb: 'Epopeya en verso del portugués clásico.' }
+    ],
+    it: [
+      { id: 'it-roma', title: 'Una gita a Roma', author: LT, year: 2026, level: 0, blurb: 'Un día de turismo en presente.' },
+      { id: 'it-pinocchio', title: 'Le avventure di Pinocchio', author: 'Carlo Collodi', year: 1883, level: 1, blurb: 'Capítulos cortos y lenguaje directo.' },
+      { id: 'it-cuore', title: 'Cuore', author: 'Edmondo De Amicis', year: 1886, level: 2, blurb: 'Diario escolar, cercano y emotivo.' },
+      { id: 'it-verga', title: 'I Malavoglia', author: 'Giovanni Verga', year: 1881, level: 3, blurb: 'Una familia de pescadores sicilianos.' },
+      { id: 'it-manzoni', title: 'I promessi sposi', author: 'Alessandro Manzoni', year: 1827, level: 4, blurb: 'La gran novela histórica italiana.' },
+      { id: 'it-dante', title: 'La Divina Commedia', author: 'Dante Alighieri', year: 1321, level: 5, blurb: 'Poesía medieval en tercetos.' }
+    ],
+    de: [
+      { id: 'de-berlin', title: 'Ein Morgen in Berlin', author: LT, year: 2026, level: 0, blurb: 'Rutinas de la mañana en presente.' },
+      { id: 'de-grimm', title: 'Kinder- und Hausmärchen', author: 'Brüder Grimm', year: 1812, level: 1, blurb: 'Cuentos populares con estructuras que se repiten.' },
+      { id: 'de-storm', title: 'Immensee', author: 'Theodor Storm', year: 1849, level: 2, blurb: 'Novela corta, lírica y sencilla.' },
+      { id: 'de-kafka', title: 'Die Verwandlung', author: 'Franz Kafka', year: 1915, level: 3, blurb: 'Frases claras para una historia extraña.' },
+      { id: 'de-fontane', title: 'Effi Briest', author: 'Theodor Fontane', year: 1895, level: 4, blurb: 'Realismo alemán con diálogos finos.' },
+      { id: 'de-faust', title: 'Faust', author: 'Johann Wolfgang von Goethe', year: 1808, level: 5, blurb: 'Teatro en verso, cumbre del alemán.' }
+    ]
+  };
+
+  /* ================================================================== *
+   * Dictionaries — tuple: [ipa, translation(es), pos, cefr, exampleSrc, exampleEs, note?]
+   * ================================================================== */
+  const DICT = {
+    en: {
+      // The Red Door (A1)
+      tom: ['tɒm','Tom','nombre propio','—','Tom is my brother.','Tom es mi hermano.'],
+      has: ['hæz','tiene','verbo','A1','She has a dog.','Ella tiene un perro.','3.ª persona de "to have".'],
+      small: ['smɔːl','pequeño/a','adjetivo','A1','A small table.','Una mesa pequeña.'],
+      house: ['haʊs','casa','sustantivo','A1','My house is near the park.','Mi casa está cerca del parque.'],
+      red: ['red','rojo/a','adjetivo','A1','A red apple.','Una manzana roja.'],
+      door: ['dɔː','puerta','sustantivo','A1','Close the door, please.','Cierra la puerta, por favor.'],
+      every: ['ˈevri','cada, todos los','determinante','A1','Every day.','Todos los días.'],
+      morning: ['ˈmɔːnɪŋ','mañana','sustantivo','A1','Good morning!','¡Buenos días!'],
+      opens: ['ˈəʊpənz','abre','verbo','A1','The shop opens at nine.','La tienda abre a las nueve.'],
+      looks: ['lʊks','mira','verbo','A1','She looks at the sea.','Ella mira el mar.','"Look at" = mirar algo.'],
+      street: ['striːt','calle','sustantivo','A1','A quiet street.','Una calle tranquila.'],
+      today: ['təˈdeɪ','hoy','adverbio','A1','Today is Monday.','Hoy es lunes.'],
+      cat: ['kæt','gato','sustantivo','A1','The cat is sleeping.','El gato está durmiendo.'],
+      cats: ['kæts','gatos','sustantivo','A1','Cats love fish.','A los gatos les encanta el pescado.'],
+      step: ['step','escalón','sustantivo','A2','Mind the step.','Cuidado con el escalón.'],
+      black: ['blæk','negro/a','adjetivo','A1','A black coat.','Un abrigo negro.'],
+      thin: ['θɪn','flaco/a, delgado/a','adjetivo','A1','The dog is very thin.','El perro está muy flaco.'],
+      gives: ['ɡɪvz','da','verbo','A1','He gives her a flower.','Le da una flor.'],
+      some: ['sʌm','un poco de, algo de','determinante','A1','Some water, please.','Un poco de agua, por favor.'],
+      milk: ['mɪlk','leche','sustantivo','A1','Milk is good for you.','La leche es buena para ti.'],
+      drinks: ['drɪŋks','bebe','verbo','A1','She drinks tea.','Ella bebe té.'],
+      thank: ['θæŋk','agradecer','verbo','A1','Thank you very much.','Muchas gracias.','"Thank you" = gracias.'],
+      you: ['juː','tú, usted; te','pronombre','A1','I love you.','Te quiero.'],
+      says: ['sez','dice','verbo','A1','She says hello.','Ella dice hola.','Ojo: se pronuncia /sez/, no /seɪz/.'],
+      surprised: ['səˈpraɪzd','sorprendido/a','adjetivo','A2','I was surprised.','Me sorprendí.'],
+      "can't": ['kɑːnt','no puede(n)','verbo modal','A1','I can’t swim.','No sé nadar.','Contracción de "cannot".'],
+      talk: ['tɔːk','hablar','verbo','A1','Can we talk?','¿Podemos hablar?','La "l" no se pronuncia.'],
+      // Alice (C1)
+      alice: ['ˈælɪs','Alicia','nombre propio','—','Alice followed the rabbit into the garden.','Alicia siguió al conejo hasta el jardín.'],
+      was: ['wɒz','era / estaba','verbo','A1','The room was quiet.','La habitación estaba en silencio.','Pasado de "to be" (1.ª y 3.ª persona del singular).'],
+      beginning: ['bɪˈɡɪnɪŋ','empezando','verbo','A2','It is beginning to rain.','Está empezando a llover.','Gerundio de "to begin".'],
+      to: ['tuː','a, para','preposición','A1','She went to the market.','Fue al mercado.'],
+      get: ['ɡet','ponerse, volverse; conseguir','verbo','A1','Don’t get angry.','No te enojes.','Con adjetivos indica un cambio de estado: "get tired" = cansarse.'],
+      very: ['ˈveri','muy','adverbio','A1','The soup is very hot.','La sopa está muy caliente.'],
+      tired: ['ˈtaɪəd','cansado/a','adjetivo','A1','I am tired after work.','Estoy cansada después del trabajo.'],
+      of: ['ɒv','de','preposición','A1','A cup of tea.','Una taza de té.'],
+      sitting: ['ˈsɪtɪŋ','sentado/a','verbo','A2','He was sitting by the window.','Estaba sentado junto a la ventana.'],
+      by: ['baɪ','junto a; por','preposición','A1','The house by the river.','La casa junto al río.'],
+      her: ['hɜː','su; la, a ella','determinante','A1','She lost her keys.','Ella perdió sus llaves.'],
+      sister: ['ˈsɪstə','hermana','sustantivo','A1','My sister lives in Madrid.','Mi hermana vive en Madrid.'],
+      on: ['ɒn','en, sobre','preposición','A1','The book is on the table.','El libro está sobre la mesa.','"Hurried on" = siguió adelante a toda prisa.'],
+      the: ['ðə','el, la, los, las','determinante','A1','The sun is up.','El sol ha salido.'],
+      bank: ['bæŋk','orilla (de un río)','sustantivo','B1','They had a picnic on the bank of the river.','Hicieron un pícnic en la orilla del río.','Ojo: aquí no es "banco" de dinero. El contexto decide el significado.'],
+      and: ['ænd','y','conjunción','A1','Bread and butter.','Pan y mantequilla.'],
+      having: ['ˈhævɪŋ','tener','verbo','A1','She was tired of having nothing to do.','Estaba cansada de no tener nada que hacer.'],
+      nothing: ['ˈnʌθɪŋ','nada','pronombre','A1','There is nothing in the box.','No hay nada en la caja.'],
+      do: ['duː','hacer','verbo','A1','What do you want to do?','¿Qué quieres hacer?'],
+      once: ['wʌns','una vez','adverbio','A2','I visited Paris once.','Visité París una vez.','"Never once" = ni una sola vez.'],
+      or: ['ɔː','o','conjunción','A1','Tea or coffee?','¿Té o café?'],
+      twice: ['twaɪs','dos veces','adverbio','A2','I called her twice.','La llamé dos veces.'],
+      she: ['ʃiː','ella','pronombre','A1','She is reading.','Ella está leyendo.'],
+      had: ['hæd','tenía; había','verbo','A1','She had a small garden.','Tenía un pequeño jardín.','Pasado de "to have". Con participio forma el pluscuamperfecto: "had peeped" = había echado un vistazo.'],
+      peeped: ['piːpt','echó un vistazo','verbo','C1','He peeped through the keyhole.','Echó un vistazo por el ojo de la cerradura.','Mirar a escondidas o muy rápido. Pasado de "to peep".'],
+      into: ['ˈɪntuː','dentro de, hacia el interior','preposición','A2','She looked into the box.','Miró dentro de la caja.'],
+      book: ['bʊk','libro','sustantivo','A1','This book is very long.','Este libro es muy largo.'],
+      reading: ['ˈriːdɪŋ','leyendo','verbo','A1','I love reading at night.','Me encanta leer por la noche.'],
+      but: ['bʌt','pero','conjunción','A1','Small but strong.','Pequeño pero fuerte.'],
+      it: ['ɪt','ello, lo, la','pronombre','A1','It is late.','Es tarde.'],
+      no: ['nəʊ','ningún, ninguna','determinante','A1','There is no milk.','No hay leche.'],
+      pictures: ['ˈpɪktʃəz','dibujos, ilustraciones','sustantivo','A1','The book has beautiful pictures.','El libro tiene ilustraciones preciosas.'],
+      conversations: ['ˌkɒnvəˈseɪʃənz','conversaciones, diálogos','sustantivo','A2','We had long conversations.','Tuvimos largas conversaciones.'],
+      in: ['ɪn','en, dentro de','preposición','A1','The keys are in my bag.','Las llaves están en mi bolso.'],
+      what: ['wɒt','qué; lo que','pronombre','A1','What is your name?','¿Cómo te llamas?'],
+      is: ['ɪz','es / está','verbo','A1','The sky is blue.','El cielo es azul.'],
+      use: ['juːs','utilidad, sentido','sustantivo','B1','What is the use of waiting?','¿De qué sirve esperar?','Como sustantivo se pronuncia /juːs/; como verbo, /juːz/.'],
+      thought: ['θɔːt','pensó','verbo','A2','She thought about the question.','Pensó en la pregunta.','Pasado de "to think". "Thought it over" = lo pensó detenidamente.'],
+      without: ['wɪˈðaʊt','sin','preposición','A2','Coffee without sugar.','Café sin azúcar.'],
+      so: ['səʊ','así que; tan','adverbio','A1','It was so cold.','Hacía tanto frío.'],
+      considering: ['kənˈsɪdərɪŋ','considerando, pensando','verbo','B1','I am considering a new job.','Estoy pensando en un trabajo nuevo.'],
+      own: ['əʊn','propio/a','adjetivo','A2','She has her own room.','Tiene su propia habitación.'],
+      mind: ['maɪnd','mente','sustantivo','B1','Keep an open mind.','Mantén la mente abierta.'],
+      as: ['æz','como; tan','conjunción','A2','As well as she could.','Lo mejor que pudo.'],
+      well: ['wel','bien','adverbio','A1','She sings well.','Canta bien.'],
+      could: ['kʊd','podía, pudo','verbo modal','A2','I could not sleep.','No podía dormir.'],
+      for: ['fɔː','porque; para','conjunción','A2','She stayed inside, for it was raining.','Se quedó adentro, porque llovía.','En inglés literario "for" puede significar "porque".'],
+      hot: ['hɒt','caluroso; caliente','adjetivo','A1','A hot summer day.','Un caluroso día de verano.'],
+      day: ['deɪ','día','sustantivo','A1','Have a nice day.','Que tengas un buen día.'],
+      made: ['meɪd','hizo; hacía sentir','verbo','A2','The film made me cry.','La película me hizo llorar.','Pasado de "to make". "Made her feel" = la hacía sentirse.'],
+      feel: ['fiːl','sentir(se)','verbo','A1','I feel happy today.','Hoy me siento feliz.'],
+      sleepy: ['ˈsliːpi','con sueño, somnoliento/a','adjetivo','A2','The baby is sleepy.','El bebé tiene sueño.'],
+      stupid: ['ˈstjuːpɪd','torpe, atontado/a','adjetivo','A2','The heat made me feel stupid.','El calor me dejó atontada.'],
+      whether: ['ˈweðə','si (para expresar duda)','conjunción','B1','I don’t know whether to stay.','No sé si quedarme.'],
+      pleasure: ['ˈpleʒə','placer, gusto','sustantivo','B1','It’s a pleasure to meet you.','Es un placer conocerte.'],
+      making: ['ˈmeɪkɪŋ','hacer, fabricar','verbo','A1','She enjoys making bread.','Le gusta hacer pan.'],
+      'daisy-chain': ['ˈdeɪzi tʃeɪn','guirnalda de margaritas','sustantivo','C1','The children made a daisy-chain.','Los niños hicieron una guirnalda de margaritas.'],
+      would: ['wʊd','-ría (condicional)','verbo modal','A2','It would be nice.','Sería agradable.'],
+      be: ['biː','ser / estar','verbo','A1','I want to be a doctor.','Quiero ser médica.'],
+      worth: ['wɜːθ','valer la pena','adjetivo','B1','The trip was worth it.','El viaje valió la pena.'],
+      trouble: ['ˈtrʌbl','molestia, esfuerzo','sustantivo','B1','It’s not worth the trouble.','No vale la pena la molestia.'],
+      getting: ['ˈɡetɪŋ','levantarse (con "up")','verbo','A1','Getting up early is hard.','Levantarse temprano cuesta.'],
+      up: ['ʌp','arriba','adverbio','A1','Look up!','¡Mira arriba!'],
+      picking: ['ˈpɪkɪŋ','recogiendo','verbo','A2','We spent the day picking apples.','Pasamos el día recogiendo manzanas.'],
+      daisies: ['ˈdeɪziz','margaritas','sustantivo','B2','The field was full of daisies.','El campo estaba lleno de margaritas.'],
+      when: ['wen','cuando','conjunción','A1','Call me when you arrive.','Llámame cuando llegues.'],
+      suddenly: ['ˈsʌdənli','de repente','adverbio','A2','Suddenly, the lights went out.','De repente, se apagaron las luces.'],
+      white: ['waɪt','blanco/a','adjetivo','A1','A white cat.','Un gato blanco.'],
+      rabbit: ['ˈræbɪt','conejo','sustantivo','A2','The rabbit hid in the grass.','El conejo se escondió en la hierba.'],
+      with: ['wɪð','con','preposición','A1','Tea with milk.','Té con leche.'],
+      pink: ['pɪŋk','rosado/a','adjetivo','A1','A pink dress.','Un vestido rosado.'],
+      eyes: ['aɪz','ojos','sustantivo','A1','She has green eyes.','Tiene los ojos verdes.'],
+      ran: ['ræn','corrió','verbo','A1','The dog ran to the door.','El perro corrió hacia la puerta.','Pasado de "to run".'],
+      close: ['kləʊs','cerca','adverbio','A2','Stay close to me.','Quédate cerca de mí.','Como adverbio se pronuncia /kləʊs/; el verbo "cerrar" es /kləʊz/.'],
+      there: ['ðeə','allí; haber (there was = había)','adverbio','A1','There was a problem.','Había un problema.'],
+      remarkable: ['rɪˈmɑːkəbl','extraordinario/a, notable','adjetivo','B2','A remarkable discovery.','Un descubrimiento extraordinario.'],
+      that: ['ðæt','eso; que','pronombre','A1','I like that.','Me gusta eso.'],
+      nor: ['nɔː','ni','conjunción','B2','Neither she nor I knew.','Ni ella ni yo lo sabíamos.'],
+      did: ['dɪd','hizo; auxiliar del pasado','verbo','A1','Did you see it?','¿Lo viste?'],
+      think: ['θɪŋk','pensar, creer','verbo','A1','I think so.','Creo que sí.'],
+      much: ['mʌtʃ','mucho','adverbio','A1','Thank you very much.','Muchas gracias.'],
+      out: ['aʊt','fuera, afuera','adverbio','A1','She went out.','Salió.','"Out of the way" = fuera de lo normal.'],
+      way: ['weɪ','camino; manera','sustantivo','A1','This is the way home.','Este es el camino a casa.'],
+      hear: ['hɪə','oír','verbo','A1','Can you hear me?','¿Me oyes?'],
+      say: ['seɪ','decir','verbo','A1','What did you say?','¿Qué dijiste?'],
+      itself: ['ɪtˈself','sí mismo','pronombre','B1','The door opened by itself.','La puerta se abrió sola.'],
+      oh: ['əʊ','¡oh!, ¡ay!','interjección','A1','Oh, I see.','Ah, ya veo.'],
+      dear: ['dɪə','¡vaya!, ¡ay, Dios!','interjección','A2','Oh dear, I forgot!','¡Ay, se me olvidó!','"Oh dear!" expresa preocupación. Como adjetivo significa "querido/a".'],
+      i: ['aɪ','yo','pronombre','A1','I am here.','Estoy aquí.'],
+      shall: ['ʃæl','(futuro formal)','verbo modal','B2','I shall return.','Volveré.','Forma antigua o formal de "will" con "I" y "we".'],
+      late: ['leɪt','tarde','adjetivo','A1','Sorry I’m late.','Perdón por llegar tarde.'],
+      over: ['ˈəʊvə','(pensar algo) a fondo','adverbio','A2','Think it over.','Piénsalo bien.'],
+      afterwards: ['ˈɑːftəwədz','después, más tarde','adverbio','B1','We went for dinner afterwards.','Después fuimos a cenar.'],
+      occurred: ['əˈkɜːd','se le ocurrió','verbo','B2','It occurred to me that she was right.','Se me ocurrió que tenía razón.'],
+      ought: ['ɔːt','debería','verbo modal','B2','You ought to rest.','Deberías descansar.'],
+      have: ['hæv','haber; tener','verbo','A1','I have two brothers.','Tengo dos hermanos.'],
+      wondered: ['ˈwʌndəd','se asombró; se preguntó','verbo','B1','I wondered why he left.','Me pregunté por qué se fue.'],
+      at: ['æt','a, en','preposición','A1','At home.','En casa.'],
+      this: ['ðɪs','esto, este/a','pronombre','A1','This is my house.','Esta es mi casa.'],
+      time: ['taɪm','momento; tiempo','sustantivo','A1','At the time, I was young.','En aquel momento, era joven.'],
+      all: ['ɔːl','todo','pronombre','A1','All is well.','Todo va bien.'],
+      seemed: ['siːmd','parecía','verbo','A2','He seemed happy.','Parecía feliz.'],
+      quite: ['kwaɪt','bastante; completamente','adverbio','B1','It was quite natural.','Era de lo más natural.'],
+      natural: ['ˈnætʃrəl','natural','adjetivo','A2','A natural reaction.','Una reacción natural.'],
+      actually: ['ˈæktʃuəli','realmente, de verdad','adverbio','B1','He actually said yes.','De verdad dijo que sí.','Falso amigo: no significa "actualmente" (currently).'],
+      took: ['tʊk','sacó; tomó','verbo','A1','She took a pen out of her bag.','Sacó un bolígrafo de la cartera.','Pasado de "to take".'],
+      a: ['ə','un, una','determinante','A1','A small house.','Una casa pequeña.'],
+      watch: ['wɒtʃ','reloj (de pulsera o de bolsillo)','sustantivo','A1','My watch is slow.','Mi reloj está atrasado.'],
+      its: ['ɪts','su (de una cosa o animal)','determinante','A2','The dog wagged its tail.','El perro movió la cola.'],
+      'waistcoat-pocket': ['ˈweɪskəʊt ˌpɒkɪt','bolsillo del chaleco','sustantivo','C1','He kept a coin in his waistcoat-pocket.','Guardaba una moneda en el bolsillo del chaleco.'],
+      looked: ['lʊkt','miró','verbo','A1','She looked at the sky.','Miró al cielo.'],
+      then: ['ðen','luego, entonces','adverbio','A1','First eat, then sleep.','Primero come, luego duerme.'],
+      hurried: ['ˈhʌrid','se apresuró','verbo','B1','He hurried home.','Se fue a casa a toda prisa.'],
+      started: ['ˈstɑːtɪd','se sobresaltó; empezó','verbo','A2','She started to her feet.','Se puso de pie de un salto.','"Start to one’s feet" = levantarse de un salto.'],
+      feet: ['fiːt','pies','sustantivo','A1','My feet hurt.','Me duelen los pies.'],
+      flashed: ['flæʃt','pasó como un relámpago','verbo','B2','An idea flashed across her mind.','Una idea le cruzó la mente.'],
+      across: ['əˈkrɒs','a través de','preposición','A2','We walked across the park.','Cruzamos el parque.'],
+      never: ['ˈnevə','nunca','adverbio','A1','I never drink coffee.','Nunca tomo café.'],
+      before: ['bɪˈfɔː','antes','adverbio','A1','I have seen it before.','Lo he visto antes.'],
+      seen: ['siːn','visto','verbo','A2','Have you seen my phone?','¿Has visto mi teléfono?'],
+      either: ['ˈaɪðə','ni... ni; o... o','determinante','B1','Either tea or coffee.','O té o café.'],
+      take: ['teɪk','sacar; tomar','verbo','A1','Take a seat.','Toma asiento.'],
+      burning: ['ˈbɜːnɪŋ','ardiendo','adjetivo','B1','Burning with curiosity.','Muerta de curiosidad.'],
+      curiosity: ['ˌkjʊəriˈɒsəti','curiosidad','sustantivo','B1','Curiosity killed the cat.','La curiosidad mató al gato.'],
+      field: ['fiːld','campo','sustantivo','A2','Cows in the field.','Vacas en el campo.'],
+      after: ['ˈɑːftə','detrás de; después de','preposición','A1','The dog ran after the ball.','El perro corrió tras la pelota.'],
+      fortunately: ['ˈfɔːtʃənətli','afortunadamente','adverbio','B1','Fortunately, nobody was hurt.','Afortunadamente, nadie salió herido.'],
+      just: ['dʒʌst','justo','adverbio','A2','Just in time.','Justo a tiempo.'],
+      see: ['siː','ver','verbo','A1','I can see the sea.','Veo el mar.'],
+      pop: ['pɒp','meterse de golpe','verbo','B2','He popped into the shop.','Se metió un momento en la tienda.'],
+      down: ['daʊn','abajo','adverbio','A1','Sit down.','Siéntate.'],
+      large: ['lɑːdʒ','grande','adjetivo','A1','A large city.','Una ciudad grande.','Falso amigo: no significa "largo" (long).'],
+      'rabbit-hole': ['ˈræbɪt həʊl','madriguera de conejo','sustantivo','B2','Down the rabbit-hole.','Por la madriguera abajo.','Hoy también se usa en sentido figurado: perderse en un tema sin fin.'],
+      under: ['ˈʌndə','debajo de','preposición','A1','Under the bed.','Debajo de la cama.'],
+      hedge: ['hedʒ','seto','sustantivo','B2','A tall hedge surrounds the garden.','Un seto alto rodea el jardín.'],
+      another: ['əˈnʌðə','otro/a','determinante','A1','Another cup, please.','Otra taza, por favor.'],
+      moment: ['ˈməʊmənt','momento','sustantivo','A1','Wait a moment.','Espera un momento.'],
+      went: ['went','fue; bajó','verbo','A1','She went home.','Se fue a casa.','Pasado de "to go". "Down went Alice" = Alicia bajó.'],
+      how: ['haʊ','cómo','adverbio','A1','How are you?','¿Cómo estás?'],
+      world: ['wɜːld','mundo','sustantivo','A1','Around the world.','Alrededor del mundo.','"How in the world" = cómo demonios.'],
+      again: ['əˈɡen','otra vez, de nuevo','adverbio','A1','Try again.','Inténtalo de nuevo.']
+    },
+    fr: {
+      le: ['lə','el','determinante','A1','Le chat dort.','El gato duerme.'],
+      matin: ['ma.tɛ̃','mañana (parte del día)','sustantivo','A1','Je cours le matin.','Corro por la mañana.'],
+      la: ['la','la','determinante','A1','La porte est ouverte.','La puerta está abierta.'],
+      ville: ['vil','ciudad','sustantivo','A1','Une grande ville.','Una gran ciudad.'],
+      'était': ['e.tɛ','era / estaba','verbo','A2','Il était fatigué.','Estaba cansado.','Imperfecto de "être".'],
+      encore: ['ɑ̃.kɔʁ','todavía; otra vez','adverbio','A1','Il dort encore.','Todavía duerme.'],
+      silencieuse: ['si.lɑ̃.sjøz','silenciosa','adjetivo','B1','Une rue silencieuse.','Una calle silenciosa.','Femenino de "silencieux".'],
+      marie: ['ma.ʁi','María','nombre propio','—','Marie habite à Marseille.','María vive en Marsella.'],
+      ouvrit: ['u.vʁi','abrió','verbo','B2','Il ouvrit la porte.','Abrió la puerta.','Passé simple de "ouvrir", el pasado típico de la narración escrita.'],
+      'fenêtre': ['fə.nɛtʁ','ventana','sustantivo','A1','Ferme la fenêtre.','Cierra la ventana.'],
+      et: ['e','y','conjunción','A1','Toi et moi.','Tú y yo.'],
+      regarda: ['ʁə.ɡaʁ.da','miró','verbo','B2','Elle regarda le ciel.','Miró el cielo.','Passé simple de "regarder".'],
+      mer: ['mɛʁ','mar','sustantivo','A1','La mer est calme.','El mar está en calma.','En francés "mer" es femenino: la mer.'],
+      un: ['œ̃','un','determinante','A1','Un café, s’il vous plaît.','Un café, por favor.'],
+      une: ['yn','una','determinante','A1','Une maison.','Una casa.'],
+      petit: ['pə.ti','pequeño','adjetivo','A1','Un petit chien.','Un perro pequeño.'],
+      bateau: ['ba.to','barco','sustantivo','A1','Le bateau part à midi.','El barco sale a mediodía.'],
+      blanc: ['blɑ̃','blanco','adjetivo','A1','Un mur blanc.','Una pared blanca.'],
+      'avançait': ['a.vɑ̃.sɛ','avanzaba','verbo','B1','La file avançait lentement.','La fila avanzaba despacio.','Imperfecto de "avancer".'],
+      lentement: ['lɑ̃t.mɑ̃','lentamente, despacio','adverbio','A2','Parle lentement.','Habla despacio.'],
+      vers: ['vɛʁ','hacia','preposición','A2','Il marche vers la gare.','Camina hacia la estación.'],
+      port: ['pɔʁ','puerto','sustantivo','A2','Le port de Marseille.','El puerto de Marsella.'],
+      elle: ['ɛl','ella','pronombre','A1','Elle chante.','Ella canta.'],
+      pensa: ['pɑ̃.sa','pensó','verbo','B2','Il pensa à sa mère.','Pensó en su madre.','Passé simple de "penser".'],
+      il: ['il','él','pronombre','A1','Il pleut.','Llueve.','Aquí aparece como "qu’il" = que él (que + il).'],
+      apportait: ['a.pɔʁ.tɛ','traía','verbo','B1','Le facteur apportait le courrier.','El cartero traía el correo.'],
+      'peut-être': ['pø.tɛtʁ','quizás, tal vez','adverbio','A2','Peut-être demain.','Quizás mañana.'],
+      lettre: ['lɛtʁ','carta','sustantivo','A1','J’ai reçu une lettre.','Recibí una carta.'],
+      descendit: ['de.sɑ̃.di','bajó','verbo','B2','Elle descendit du train.','Bajó del tren.','Passé simple de "descendre".'],
+      escalier: ['ɛs.ka.lje','escalera','sustantivo','A2','Prends l’escalier.','Toma la escalera.'],
+      en: ['ɑ̃','en; (con gerundio) mientras','preposición','A1','Il chante en marchant.','Canta mientras camina.','"En" + participio presente indica cómo se hace algo: "en courant" = corriendo.'],
+      courant: ['ku.ʁɑ̃','corriendo','verbo','B1','Il est arrivé en courant.','Llegó corriendo.'],
+      dans: ['dɑ̃','en, dentro de','preposición','A1','Dans la boîte.','En la caja.'],
+      rue: ['ʁy','calle','sustantivo','A1','Une rue étroite.','Una calle estrecha.'],
+      air: ['ɛʁ','aire','sustantivo','A1','L’air frais.','El aire fresco.'],
+      sentait: ['sɑ̃.tɛ','olía a','verbo','B1','La cuisine sentait le café.','La cocina olía a café.','"Sentir" + sustantivo = oler a.'],
+      sel: ['sɛl','sal','sustantivo','A1','Passe-moi le sel.','Pásame la sal.'],
+      pain: ['pɛ̃','pan','sustantivo','A1','Du pain frais.','Pan fresco.','Falso amigo con el inglés "pain" (dolor).'],
+      chaud: ['ʃo','caliente','adjetivo','A1','Un café chaud.','Un café caliente.']
+    }
+  };
+
+  /* ================================================================== *
+   * Readable demo books
+   * ================================================================== */
+  const BOOKS = {
+    'en-red-door': {
+      lang: 'en', voice: 'en-GB', chapterIndex: 0, chapters: 6, chapterTitle: 'The Cat on the Step',
+      paragraphs: [
+        'Tom has a small house. The house has a red door. Every morning, Tom opens the door and looks at the street.',
+        'Today, a cat is sitting on the step. The cat is black and very thin. Tom gives the cat some milk.',
+        'The cat drinks the milk and looks at Tom. "Thank you," says the cat. Tom is very surprised. Cats can\'t talk!'
+      ]
+    },
+    'en-alice': {
+      lang: 'en', voice: 'en-GB', chapterIndex: 0, chapters: 12, chapterTitle: 'Down the Rabbit-Hole',
+      paragraphs: [
+        "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, 'and what is the use of a book,' thought Alice 'without pictures or conversations?'",
+        "So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.",
+        "There was nothing so very remarkable in that; nor did Alice think it so very much out of the way to hear the Rabbit say to itself, 'Oh dear! Oh dear! I shall be late!' (when she thought it over afterwards, it occurred to her that she ought to have wondered at this, but at the time it all seemed quite natural); but when the Rabbit actually took a watch out of its waistcoat-pocket, and looked at it, and then hurried on, Alice started to her feet, for it flashed across her mind that she had never before seen a rabbit with either a waistcoat-pocket, or a watch to take out of it, and burning with curiosity, she ran across the field after it, and fortunately was just in time to see it pop down a large rabbit-hole under the hedge.",
+        "In another moment down went Alice after it, never once considering how in the world she was to get out again."
+      ]
+    },
+    'fr-port': {
+      lang: 'fr', voice: 'fr-FR', chapterIndex: 0, chapters: 3, chapterTitle: 'Le matin',
+      paragraphs: [
+        "Le matin, la ville était encore silencieuse. Marie ouvrit la fenêtre et regarda la mer. Un petit bateau blanc avançait lentement vers le port, et elle pensa qu'il apportait peut-être une lettre.",
+        "Elle descendit l'escalier en courant. Dans la rue, l'air sentait le sel et le pain chaud."
+      ]
+    }
+  };
+  const findMeta = id => Object.values(CATALOG).flat().find(b => b.id === id);
+  const ROMAN = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
+  const SIZES = [17, 19, 21, 24];
+  const SPEEDS = [0.5, 0.75, 1];
+
+  /* ================================================================== *
+   * Phonology: IPA → approximate spelling in the reader's native language
+   * ================================================================== */
+  const VOWELS = new Set(['i','iː','ɪ','e','ɛ','æ','ə','ɜː','ɜ','ʌ','a','ɑː','ɑ','ɒ','ɔː','ɔ','o','ʊ','u','uː','y','ø','œ','ɑ̃','ɛ̃','ɔ̃','œ̃','eɪ','aɪ','ɔɪ','əʊ','aʊ','ɪə','eə','ʊə']);
+  const CONSONANTS = ['tʃ','dʒ','p','b','t','d','k','ɡ','f','v','θ','ð','s','z','ʃ','ʒ','h','m','n','ŋ','l','r','ʁ','j','w','ɥ'];
+  const PHONEMES = [...VOWELS, ...CONSONANTS].sort((a, b) => b.length - a.length);
+  const BASE = { p: 'p', b: 'b', t: 't', d: 'd', k: 'k', f: 'f', v: 'v', m: 'm', n: 'n', l: 'l', s: 's', z: 'z' };
+  const DIPH_LATIN = { 'eɪ': 'ei', 'aɪ': 'ai', 'ɔɪ': 'oi', 'əʊ': 'ou', 'aʊ': 'au', 'ɪə': 'ie', 'eə': 'ee', 'ʊə': 'ue' };
+  const TH = { s: 'th', mark: true };
+  const DH = { s: 'dh', mark: true };
+
+  const ES_BASE = {
+    ...BASE, ...DIPH_LATIN,
+    i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'e', 'ɛ': 'e', 'æ': 'a', 'ə': 'e', 'ɜː': 'e', 'ɜ': 'e', 'ʌ': 'a', a: 'a',
+    'ɑː': 'aa', 'ɑ': 'a', 'ɒ': 'o', 'ɔː': 'oo', 'ɔ': 'o', o: 'o', 'ʊ': 'u', u: 'u', 'uː': 'uu',
+    y: 'ü', 'ø': 'eu', 'œ': 'eu', 'ɑ̃': 'an', 'ɛ̃': 'en', 'ɔ̃': 'on', 'œ̃': 'en',
+    'ɡ': { s: 'g', soft: 'gu' }, z: 's', 'ð': 'd', 'ʃ': 'sh', 'ʒ': 'y', h: 'j', 'tʃ': 'ch', 'dʒ': 'y',
+    'ŋ': 'ng', r: 'r', 'ʁ': 'r', j: 'y', w: 'u', 'ɥ': 'ü'
+  };
+  const TABLES = {
+    'es-ES': { ...ES_BASE, 'θ': 'z' },
+    'es-LA': { ...ES_BASE, 'θ': TH },
+    en: {
+      ...BASE, i: 'ee', 'iː': 'ee', 'ɪ': 'i', e: 'e', 'ɛ': 'e', 'æ': 'a', 'ə': 'uh', 'ɜː': 'ur', 'ɜ': 'ur', 'ʌ': 'u', a: 'ah',
+      'ɑː': 'ah', 'ɑ': 'ah', 'ɒ': 'o', 'ɔː': 'aw', 'ɔ': 'o', o: 'oh', 'ʊ': 'oo', u: 'oo', 'uː': 'oo',
+      y: 'ew', 'ø': 'uh', 'œ': 'uh', 'ɑ̃': 'ahn', 'ɛ̃': 'an', 'ɔ̃': 'ohn', 'œ̃': 'uhn',
+      'eɪ': 'ay', 'aɪ': 'eye', 'ɔɪ': 'oy', 'əʊ': 'oh', 'aʊ': 'ow', 'ɪə': 'eer', 'eə': 'air', 'ʊə': 'oor',
+      'ɡ': 'g', 'θ': 'th', 'ð': 'th', 'ʃ': 'sh', 'ʒ': 'zh', h: 'h', 'tʃ': 'ch', 'dʒ': 'j', 'ŋ': 'ng', r: 'r', 'ʁ': 'r', j: 'y', w: 'w', 'ɥ': 'w'
+    },
+    pt: {
+      ...BASE, ...DIPH_LATIN, 'ɔɪ': 'ói', 'əʊ': 'ôu', 'ɪə': 'ia', 'eə': 'éa', 'ʊə': 'ua',
+      i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'ê', 'ɛ': 'é', 'æ': 'é', 'ə': 'â', 'ɜː': 'â', 'ɜ': 'â', 'ʌ': 'â', a: 'a',
+      'ɑː': 'aa', 'ɑ': 'a', 'ɒ': 'ó', 'ɔː': 'óó', 'ɔ': 'ó', o: 'ô', 'ʊ': 'u', u: 'u', 'uː': 'uu',
+      y: 'ü', 'ø': 'ê', 'œ': 'é', 'ɑ̃': 'ã', 'ɛ̃': 'ẽ', 'ɔ̃': 'õ', 'œ̃': 'ã',
+      'ɡ': { s: 'g', soft: 'gu' }, 'θ': TH, 'ð': DH, 'ʃ': 'ch', 'ʒ': 'j', h: 'rr', 'tʃ': 'tch', 'dʒ': 'dj',
+      'ŋ': 'ng', r: 'r', 'ʁ': 'rr', j: 'i', w: 'u', 'ɥ': 'u'
+    },
+    it: {
+      ...BASE, ...DIPH_LATIN,
+      i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'e', 'ɛ': 'è', 'æ': 'e', 'ə': 'e', 'ɜː': 'ö', 'ɜ': 'ö', 'ʌ': 'a', a: 'a',
+      'ɑː': 'aa', 'ɑ': 'a', 'ɒ': 'o', 'ɔː': 'oo', 'ɔ': 'ò', o: 'o', 'ʊ': 'u', u: 'u', 'uː': 'uu',
+      y: 'ü', 'ø': 'ö', 'œ': 'ö', 'ɑ̃': 'an', 'ɛ̃': 'en', 'ɔ̃': 'on', 'œ̃': 'en',
+      'ɡ': { s: 'g', soft: 'gh' }, 'θ': TH, 'ð': DH, 'ʃ': 'sh', 'ʒ': 'j', h: 'h',
+      'tʃ': { s: 'ci', soft: 'c' }, 'dʒ': { s: 'gi', soft: 'g' }, 'ŋ': 'ng', r: 'r', 'ʁ': 'r', j: 'i', w: 'u', 'ɥ': 'u'
+    },
+    fr: {
+      ...BASE, i: 'i', 'iː': 'ii', 'ɪ': 'i', e: 'é', 'ɛ': 'è', 'æ': 'a', 'ə': 'e', 'ɜː': 'eu', 'ɜ': 'eu', 'ʌ': 'a', a: 'a',
+      'ɑː': 'â', 'ɑ': 'a', 'ɒ': 'o', 'ɔː': 'ô', 'ɔ': 'o', o: 'ô', 'ʊ': 'ou', u: 'ou', 'uː': 'ou',
+      y: 'u', 'ø': 'eu', 'œ': 'eu', 'ɑ̃': 'an', 'ɛ̃': 'in', 'ɔ̃': 'on', 'œ̃': 'un',
+      'eɪ': 'éï', 'aɪ': 'aï', 'ɔɪ': 'oï', 'əʊ': 'ôou', 'aʊ': 'aou', 'ɪə': 'ie', 'eə': 'èe', 'ʊə': 'oue',
+      'ɡ': { s: 'g', soft: 'gu' }, 'θ': TH, 'ð': DH, 'ʃ': 'ch', 'ʒ': 'j', h: 'h', 'tʃ': 'tch', 'dʒ': 'dj',
+      'ŋ': 'ng', r: 'r', 'ʁ': 'r', j: 'y', w: 'ou', 'ɥ': 'u'
+    }
+  };
+
+  const TIP = {
+    'θ': 'Punta de la lengua entre los dientes y sopla aire, sin voz.',
+    'ð': 'Lengua entre los dientes, como la anterior, pero vibrando la voz.',
+    'ɪ': 'Una «i» corta y relajada, a medio camino entre «i» y «e».',
+    'æ': 'Abre la boca como para decir «a», pero intenta decir «e».',
+    'ə': 'Vocal neutra y débil, con la boca relajada. Casi no se oye.',
+    'ɜː': 'Vocal larga con los labios relajados: ni «e» ni «o».',
+    'ʌ': 'Una «a» corta y cerrada que sale del centro de la boca.',
+    'ʊ': 'Una «u» corta y relajada, sin apretar los labios.',
+    v: 'Dientes de arriba sobre el labio de abajo, vibrando. No es «b».',
+    z: 'Como una «s» pero vibrando, como el zumbido de una abeja.',
+    'ʃ': 'Como cuando pides silencio: «shh».',
+    'ʒ': 'Como «sh», pero vibrando las cuerdas vocales.',
+    'dʒ': 'Una «y» fuerte, con un pequeño golpe al inicio, como «dy».',
+    h: 'Solo aire, muy suave, sin raspar la garganta.',
+    'ŋ': 'La «n» de «tengo»: suena al fondo y la «g» casi no se oye.',
+    r: 'La lengua no toca el paladar ni vibra; se curva un poco hacia atrás.',
+    'ʁ': 'Se hace al fondo de la garganta, con una vibración suave.',
+    y: 'Di «i» con los labios redondeados como para «u».',
+    'ø': 'Di «e» con los labios redondeados como para «o».',
+    'œ': 'Di una «e» abierta con los labios redondeados.',
+    nasal: 'Vocal nasal: el aire sale también por la nariz y la «n» no se pronuncia.',
+    'ɥ': 'Una «ü» rápida que se desliza hacia la vocal siguiente.',
+    'ː': 'Los dos puntos (ː) marcan una vocal larga: alárgala un poco.'
+  };
+  const NEEDS = {
+    'es-ES': ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','v','z','ʃ','ʒ','dʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː','s'],
+    'es-LA': ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','v','z','ʃ','ʒ','dʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː'],
+    en: ['ʁ','y','ø','œ','nasal','ɥ'],
+    pt: ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','h','ŋ','r','ʁ','y','ø','œ','ɥ','ː'],
+    it: ['θ','ð','ɪ','æ','ə','ɜː','ʌ','ʊ','ʒ','h','ŋ','r','ʁ','y','ø','œ','nasal','ɥ','ː'],
+    fr: ['θ','ð','ɪ','æ','ɜː','ʌ','ʊ','h','ŋ','r','ː']
+  };
+  const TIP_OVERRIDE = {
+    'es-ES': {
+      'θ': 'Es tu «z» de España, como en «zapato». Aquí tienes ventaja.',
+      h: 'Mucho más suave que tu «j»: solo aire, sin raspar la garganta.',
+      'ʁ': 'Se parece a tu «j» de «jamón», pero con un poco de vibración.',
+      z: 'Como una «s» vibrando. No uses tu «z»: ese es otro sonido.',
+      s: 'Más fina y silbante que la «s» de España; no levantes la punta de la lengua.'
+    },
+    'es-LA': {
+      'θ': 'Este sonido no existe en el español latino. Saca la punta de la lengua entre los dientes y sopla. No lo cambies por «s» ni por «t»: «think» y «sink» son palabras distintas.',
+      'ð': 'Pon la lengua entre los dientes y vibra. Se parece a la «d» suave de «cada».',
+      h: 'Como una «j» muy suave, casi solo aire, como se dice en Venezuela y el Caribe.',
+      'ʒ': 'Como la «y» de «yo» en Argentina, con vibración.',
+      'ʁ': 'En la garganta, como una gárgara suave. No es la «rr» de «perro».'
+    },
+    pt: {
+      h: 'Como la «rr» de «carro» en Río de Janeiro: solo aire.',
+      r: 'Parecida a la «r» caipira del interior de Brasil.',
+      'ʁ': 'Como la «rr» carioca de «carro».'
+    },
+    en: {
+      'ʁ': 'Al fondo de la garganta, parecida a la «ch» de «loch» pero con voz.'
+    }
+  };
+  const NATIVE_LABEL = { 'es-ES': 'Español de España', 'es-LA': 'Español latinoamericano', en: 'English', pt: 'Português', it: 'Italiano', fr: 'Français' };
+
+  function parseIPA(ipa) {
+    const s = ipa.replace(/g/g, 'ɡ');
+    const out = [];
+    let i = 0, stress = false, brk = false;
+    while (i < s.length) {
+      const ch = s[i];
+      if (ch === 'ˈ') { stress = true; brk = true; i++; continue; }
+      if (ch === 'ˌ' || ch === '.') { brk = true; i++; continue; }
+      if (ch === 'ː') {
+        const last = out[out.length - 1];
+        if (last && VOWELS.has(last.p + 'ː')) last.p += 'ː';
+        i++; continue;
+      }
+      const hit = PHONEMES.find(p => s.startsWith(p, i));
+      if (hit) { out.push({ p: hit, stress, brk: brk && out.length > 0 }); stress = false; brk = false; i += hit.length; }
+      else i++;
+    }
+    return out;
+  }
+
+  function syllabify(ph) {
+    const nuclei = ph.map((x, i) => (VOWELS.has(x.p) ? i : -1)).filter(i => i >= 0);
+    if (nuclei.length <= 1) return [ph];
+    const cuts = [];
+    for (let n = 0; n < nuclei.length - 1; n++) {
+      const a = nuclei[n], b = nuclei[n + 1];
+      let cut = -1;
+      for (let k = a + 1; k <= b; k++) if (ph[k].brk) { cut = k; break; }
+      if (cut < 0) { const c = b - a - 1; cut = c === 0 ? b : c === 1 ? a + 1 : b - 1; }
+      cuts.push(cut);
+    }
+    const syl = []; let start = 0;
+    cuts.forEach(c => { syl.push(ph.slice(start, c)); start = c; });
+    syl.push(ph.slice(start));
+    return syl;
+  }
+
+  const firstChar = (table, p) => { const e = table[p]; return e == null ? p[0] : typeof e === 'string' ? e[0] : e.s[0]; };
+  function renderPhoneme(table, p, next) {
+    const e = table[p];
+    if (e == null) return { t: p, mark: false };
+    if (typeof e === 'string') return { t: e, mark: false };
+    let t = e.s;
+    if (e.soft && next && /[eiéèêëíẽ]/.test(firstChar(table, next.p))) t = e.soft;
+    return { t, mark: !!e.mark };
+  }
+  const tipKey = p => (['ɑ̃','ɛ̃','ɔ̃','œ̃'].includes(p) ? 'nasal' : p === 'ɜ' ? 'ɜː' : p);
+
+  /** Returns { words: [[{stressed, parts:[{t,mark}]}]], tips: [{ipa, spelled, text}] } or null when unsupported. */
+  function respell(ipa, nativeKey, targetLang) {
+    const table = TABLES[nativeKey];
+    if (!table || !ipa) return null;
+    const needs = new Set(NEEDS[nativeKey] || []);
+    const override = TIP_OVERRIDE[nativeKey] || {};
+    const tips = new Map();
+    const words = ipa.split(/\s+/).filter(Boolean).map(w => {
+      const ph = parseIPA(w);
+      const syl = syllabify(ph);
+      let stressed = syl.findIndex(sy => sy.some(x => x.stress));
+      if (stressed < 0 && targetLang === 'fr' && syl.length > 1) stressed = syl.length - 1;
+      return syl.map((sy, si) => ({
+        stressed: syl.length > 1 && si === stressed,
+        parts: sy.map(x => {
+          const idx = ph.indexOf(x);
+          const r = renderPhoneme(table, x.p, ph[idx + 1]);
+          const base = x.p.replace('ː', '');
+          for (const key of [tipKey(x.p), tipKey(base)]) {
+            const text = override[key] || (needs.has(key) ? TIP[key] : null);
+            if (text && !tips.has(key)) tips.set(key, { ipa: key === 'nasal' ? x.p : key, spelled: r.t, text });
+          }
+          if (x.p.includes('ː') && needs.has('ː') && !tips.has('ː')) tips.set('ː', { ipa: 'ː', spelled: r.t, text: TIP['ː'] });
+          return r;
+        })
+      }));
+    });
+    return { words, tips: [...tips.values()] };
+  }
+
+  /* ================================================================== *
+   * Text pipeline & speech
+   * ================================================================== */
+  const WORD_RE = /\p{L}+(?:['’\-]\p{L}+)*/gu;
+  const SENTENCE_RE = /[^.!?]+(?:[.!?]+['"’”)]*)?\s*/g;
+
+  function parseBook(paragraphs) {
+    let words = 0;
+    const parsed = paragraphs.map((p, pi) =>
+      (p.match(SENTENCE_RE) || [p]).map((s, si) => {
+        const tokens = [];
+        let last = 0, m;
+        WORD_RE.lastIndex = 0;
+        while ((m = WORD_RE.exec(s))) {
+          if (m.index > last) tokens.push({ type: 'gap', text: s.slice(last, m.index) });
+          tokens.push({ type: 'word', text: m[0], id: `${pi}-${si}-${m.index}` });
+          last = m.index + m[0].length;
+          words++;
+        }
+        if (last < s.length) tokens.push({ type: 'gap', text: s.slice(last) });
+        return { text: s.trim(), tokens };
+      })
+    );
+    return { paragraphs: parsed, words };
+  }
+
+  function toKey(surface, lang) {
+    let key = surface.toLowerCase().replace(/’/g, "'");
+    const dict = DICT[lang] || {};
+    if (lang === 'fr' && !dict[key]) {
+      const m = key.match(/^(?:l|d|j|n|s|c|m|t|qu)'(.+)$/);
+      if (m) key = m[1];
+    }
+    return key;
+  }
+
+  function lookup(lang, key) {
+    const t = (DICT[lang] || {})[key];
+    if (!t) return null;
+    return { ipa: t[0], translation: t[1], pos: t[2], cefr: t[3], exSrc: t[4], exEs: t[5], note: t[6] || null };
+  }
+
+  const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
+  const VOICE_FOR = { en: 'en-GB', fr: 'fr-FR', es: 'es-ES', pt: 'pt-BR', it: 'it-IT', de: 'de-DE' };
+  function speak(text, lang, rate) {
+    try {
+      if (!canSpeak) return;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = VOICE_FOR[lang] || lang;
+      u.rate = rate || 1;
+      window.speechSynthesis.speak(u);
+    } catch { /* speech unavailable */ }
+  }
+
+  const today = () => new Date().toISOString().slice(0, 10);
+  const yesterday = () => new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+  const rankFor = (profile, xp) => Math.min(5, (profile ? profile.level : 0) + Math.floor(xp / XP_PER_LEVEL));
+  const nativeKeyOf = p => (p ? (p.native === 'es' ? `es-${p.variant || 'LA'}` : p.native) : 'es-LA');
+
+  const DEFAULT_DECKS = [
+    { id: 'unknown', name: 'No las conozco' },
+    { id: 'sound', name: 'Pronunciación difícil' },
+    { id: 'later', name: 'Repasar más tarde' }
+  ];
+
+  /* ================================================================== *
+   * Icons
+   * ================================================================== */
+  const Icon = ({ d, size = 18 }) => html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">${d}</svg>`;
+  const I = {
+    close: html`<path d="M6 6l12 12M18 6L6 18" />`,
+    speaker: html`<g><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" /><path d="M15.5 9a4 4 0 0 1 0 6" /><path d="M18 6.5a7.5 7.5 0 0 1 0 11" /></g>`,
+    slow: html`<g><path d="M4 16c0-4 3.5-7 8-7s8 3 8 7z" /><path d="M20 16l1.5-2.5" /><path d="M7 16v2.5M17 16v2.5" /><path d="M12 9V7" /></g>`,
+    check: html`<path d="M5 12.5l4.5 4.5L19 7.5" />`,
+    stack: html`<g><path d="M4 7l8-4 8 4-8 4z" /><path d="M4 12l8 4 8-4" /><path d="M4 17l8 4 8-4" /></g>`,
+    trash: html`<g><path d="M5 7h14" /><path d="M9 7V4.5h6V7" /><path d="M7 7l1 13h8l1-13" /></g>`,
+    back: html`<path d="M15 6l-6 6 6 6" />`,
+    lock: html`<g><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></g>`,
+    plus: html`<path d="M12 5v14M5 12h14" />`,
+    flame: html`<path d="M12 3c1 3 5 5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-4 2.5-5 .5 2 1.5 3 2.5 3 0-3-1-5 0-8z" />`,
+    settings: html`<g><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M4.2 6l2.1 2.1M17.7 15.9l2.1 2.1M2.5 12h3M18.5 12h3M4.2 18l2.1-2.1M17.7 8.1l2.1-2.1" /></g>`
+  };
+
+  /* ================================================================== *
+   * Shared UI
+   * ================================================================== */
+  function Highlight({ text, term }) {
+    if (!term) return text;
+    const safe = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return text.split(new RegExp(`(${safe})`, 'gi')).map((p, i) =>
+      p.toLowerCase() === term.toLowerCase() ? html`<mark key=${i} className="hl">${p}</mark>` : p);
+  }
+
+  const Chip = ({ children, tone = 'line' }) => html`
+    <span className=${'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold tracking-wide ' +
+      (tone === 'accent' ? 'bg-soft text-accent' : tone === 'ok' ? 'border border-line text-ok' : 'border border-line text-muted')}>${children}</span>`;
+
+  function Respelling({ ipa, nativeKey, targetLang, size = 'lg' }) {
+    const r = useMemo(() => respell(ipa, nativeKey, targetLang), [ipa, nativeKey, targetLang]);
+    if (!r) return null;
+    return html`
+      <span className=${'font-read ' + (size === 'lg' ? 'text-[1.7rem] leading-tight' : 'text-sm')}>
+        ${r.words.map((syl, wi) => html`
+          <span key=${wi}>${wi > 0 ? ' ' : ''}${syl.map((s, si) => html`
+            <span key=${si}>${si > 0 ? html`<span className="text-muted">·</span>` : ''}<span className=${s.stressed ? 'font-semibold text-fg underline decoration-accent decoration-2 underline-offset-[6px]' : 'text-muted'}>${s.parts.map((p, pi) =>
+              p.mark ? html`<span key=${pi} className="mark-sound">${p.t}</span>` : p.t)}</span></span>`)}</span>`)}
+      </span>`;
+  }
+
+  function SpeedControl({ speed, setSpeed }) {
+    return html`
+      <div className="flex rounded-lg border border-line p-0.5 text-xs font-semibold" role="group" aria-label="Velocidad de la voz">
+        ${SPEEDS.map(s => html`
+          <button key=${s} type="button" onClick=${() => setSpeed(s)} aria-pressed=${speed === s}
+            className=${'tnum rounded-md px-2.5 py-1.5 transition ' + (speed === s ? 'bg-raised text-fg' : 'text-muted hover:text-fg')}>
+            ${String(s).replace('.', ',')}×
+          </button>`)}
+      </div>`;
+  }
+
+  function Toast({ toast }) {
+    if (!toast) return null;
+    return html`
+      <div className="pointer-events-none fixed inset-x-0 z-50 flex justify-center px-4" style=${{ bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }} role="status" aria-live="polite">
+        <div key=${toast.id} className="toast rounded-full border border-line bg-raised px-4 py-2 text-sm font-semibold text-fg shadow-lg">
+          <span className="text-accent">${toast.xp}</span>${toast.text ? html` <span className="text-muted">· ${toast.text}</span>` : ''}
+        </div>
+      </div>`;
+  }
+
+  function XpPill({ rank, xp }) {
+    const lv = LEVELS[rank];
+    const pct = rank === 5 ? 100 : Math.round(((xp % XP_PER_LEVEL) / XP_PER_LEVEL) * 100);
+    return html`
+      <div className="flex h-10 items-center gap-2.5 rounded-xl border border-line bg-surface px-3" title=${`${lv.rank} · ${xp} XP`}>
+        <span className="font-mono text-xs font-medium text-accent">${lv.code}</span>
+        <div className="hidden flex-col gap-1 sm:flex">
+          <span className="text-[11px] font-semibold leading-none text-fg">${lv.rank}</span>
+          <span className="block h-1 w-16 overflow-hidden rounded-full bg-raised"><span className="bar block h-full bg-accent" style=${{ width: pct + '%' }}></span></span>
+        </div>
+        <span className="tnum text-xs text-muted">${xp} XP</span>
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * Onboarding
+   * ================================================================== */
+  function Onboarding({ initial, onDone, onCancel }) {
+    const [draft, setDraft] = useState(initial || { native: null, variant: null, target: null, level: 0 });
+    const [step, setStep] = useState('native');
+    const steps = ['native', ...(draft.native === 'es' ? ['variant'] : []), 'target', 'level'];
+    const idx = steps.indexOf(step);
+    const next = () => setStep(steps[idx + 1]);
+    const prev = () => (idx > 0 ? setStep(steps[idx - 1]) : onCancel && onCancel());
+    const set = patch => setDraft(d => ({ ...d, ...patch }));
+    const canNext = step === 'native' ? !!draft.native : step === 'variant' ? !!draft.variant : step === 'target' ? !!draft.target && draft.target !== draft.native : true;
+
+    const LangGrid = ({ field, disabledCode, highlight }) => html`
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        ${LANGS.map(l => {
+          const active = draft[field] === l.code;
+          const disabled = l.code === disabledCode;
+          const has = highlight && highlight(l.code);
+          return html`
+            <button key=${l.code} type="button" disabled=${disabled}
+              onClick=${() => set(field === 'native' ? { native: l.code, variant: l.code === 'es' ? draft.variant : null, target: draft.target === l.code ? null : draft.target } : { [field]: l.code })}
+              className=${'flex min-h-[60px] items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition disabled:opacity-30 ' +
+                (active ? 'border-accent bg-soft' : 'border-line bg-surface hover:border-muted')}>
+              <span className=${'grid h-8 w-9 shrink-0 place-items-center rounded-md font-mono text-[11px] font-medium uppercase ' + (active ? 'bg-accent text-ink' : 'bg-raised text-muted')}>${l.code}</span>
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-[15px] font-semibold text-fg">${l.native}</span>
+                <span className="truncate text-xs text-muted">${has ? html`<span className="text-ok">Con lecturas de prueba</span>` : l.es}</span>
+              </span>
+            </button>`;
+        })}
+      </div>`;
+
+    const finish = () => onDone({ ...draft, variant: draft.native === 'es' ? draft.variant : null });
+
+    return html`
+      <div className="scroll-thin h-full overflow-y-auto">
+        <div className="gutter mx-auto flex min-h-full w-full max-w-3xl flex-col gap-8 pb-28 pt-8 sm:pt-14">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="grid h-9 w-9 place-items-center rounded-[10px] bg-accent font-read text-[15px] font-semibold text-ink">S</div>
+              <span className="text-[15px] font-semibold tracking-tight">Simart</span>
+            </div>
+            <span className="eyebrow tnum">Paso ${idx + 1} de ${steps.length}</span>
+          </div>
+          <div className="flex gap-1.5" aria-hidden="true">
+            ${steps.map((s, i) => html`<span key=${s} className=${'h-1 flex-1 rounded-full ' + (i <= idx ? 'bg-accent' : 'bg-raised')}></span>`)}
+          </div>
+
+          <div key=${step} className="rise flex flex-col gap-6">
+            ${step === 'native' && html`
+              <div className="flex flex-col gap-2">
+                <h1 className="font-read text-[clamp(1.8rem,5vw,2.6rem)] font-semibold leading-tight">¿Cuál es tu idioma natal?</h1>
+                <p className="max-w-[56ch] text-muted">Lo usamos para explicarte cómo suena cada palabra con los sonidos que ya conoces.</p>
+              </div>
+              <${LangGrid} field="native" />`}
+
+            ${step === 'variant' && html`
+              <div className="flex flex-col gap-2">
+                <h1 className="font-read text-[clamp(1.8rem,5vw,2.6rem)] font-semibold leading-tight">¿Qué español hablas?</h1>
+                <p className="max-w-[56ch] text-muted">En España existe un sonido que en Latinoamérica no se usa. Saberlo nos permite darte mejores pistas de pronunciación.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                ${[
+                  { id: 'LA', title: 'Latinoamérica', sample: 'zapato · cielo', how: 'Suenan con «s»: «sapato», «sielo».', hint: 'Para «th» en inglés te enseñaremos el gesto de la lengua, porque no tienes un sonido equivalente.' },
+                  { id: 'ES', title: 'España', sample: 'zapato · cielo', how: 'Suenan con /θ/, la lengua entre los dientes.', hint: 'Usaremos tu «z» como atajo: «think» se parece a «zink».' }
+                ].map(v => html`
+                  <button key=${v.id} type="button" onClick=${() => set({ variant: v.id })}
+                    className=${'flex flex-col gap-3 rounded-2xl border p-5 text-left transition ' + (draft.variant === v.id ? 'border-accent bg-soft' : 'border-line bg-surface hover:border-muted')}>
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="text-lg font-semibold text-fg">${v.title}</span>
+                      ${draft.variant === v.id && html`<span className="text-accent"><${Icon} d=${I.check} /></span>`}
+                    </span>
+                    <span className="font-read text-2xl italic text-fg">${v.sample}</span>
+                    <span className="text-sm text-fg">${v.how}</span>
+                    <span className="text-sm leading-relaxed text-muted">${v.hint}</span>
+                  </button>`)}
+              </div>`}
+
+            ${step === 'target' && html`
+              <div className="flex flex-col gap-2">
+                <h1 className="font-read text-[clamp(1.8rem,5vw,2.6rem)] font-semibold leading-tight">¿Qué idioma quieres aprender?</h1>
+                <p className="max-w-[56ch] text-muted">Puedes cambiarlo cuando quieras desde tu perfil.</p>
+              </div>
+              <${LangGrid} field="target" disabledCode=${draft.native} highlight=${c => CATALOG[c] && CATALOG[c].some(b => b.readable)} />`}
+
+            ${step === 'level' && html`
+              <div className="flex flex-col gap-2">
+                <h1 className="font-read text-[clamp(1.8rem,5vw,2.6rem)] font-semibold leading-tight">¿Desde qué nivel empiezas?</h1>
+                <p className="max-w-[56ch] text-muted">Te sugeriremos libros de tu nivel. Al leer ganas XP y subes de rango hasta Maestro.</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                ${LEVELS.map((l, i) => html`
+                  <button key=${l.code} type="button" onClick=${() => set({ level: i })}
+                    className=${'flex items-center gap-4 rounded-xl border px-4 py-3.5 text-left transition ' + (draft.level === i ? 'border-accent bg-soft' : 'border-line bg-surface hover:border-muted')}>
+                    <span className=${'grid h-11 w-11 shrink-0 place-items-center rounded-lg font-mono text-sm font-medium ' + (draft.level === i ? 'bg-accent text-ink' : 'bg-raised text-fg')}>${l.code}</span>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="font-semibold text-fg">${l.rank}</span>
+                      <span className="text-sm text-muted">${l.desc}</span>
+                    </span>
+                  </button>`)}
+                <p className="pt-1 text-sm text-muted">¿No lo sabes? Empieza en A1: los textos fáciles se leen rápido y suben tu XP enseguida.</p>
+              </div>`}
+          </div>
+        </div>
+
+        <div className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-bg" style=${{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+          <div className="gutter mx-auto flex max-w-3xl items-center justify-between gap-3 py-3">
+            <button type="button" onClick=${prev} disabled=${idx === 0 && !onCancel}
+              className="h-12 rounded-xl px-4 text-sm font-semibold text-muted transition hover:text-fg disabled:opacity-0">
+              ${idx === 0 ? 'Cancelar' : 'Atrás'}
+            </button>
+            <button type="button" disabled=${!canNext} onClick=${idx === steps.length - 1 ? finish : next}
+              className="h-12 min-w-[160px] rounded-xl bg-accent px-6 text-[15px] font-semibold text-ink transition hover:brightness-110 disabled:opacity-40">
+              ${idx === steps.length - 1 ? (initial ? 'Guardar cambios' : 'Empezar a leer') : 'Continuar'}
+            </button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * Library (level path + suggested books)
+   * ================================================================== */
+  function Library({ profile, rank, xp, streak, vocabCount, finished, onOpenBook, onEditProfile, onOpenVocab }) {
+    const [pending, setPending] = useState(null);
+    const books = CATALOG[profile.target] || [];
+    const lv = LEVELS[rank];
+    const pct = rank === 5 ? 100 : Math.round(((xp % XP_PER_LEVEL) / XP_PER_LEVEL) * 100);
+    const toNext = rank === 5 ? 0 : XP_PER_LEVEL - (xp % XP_PER_LEVEL);
+    const nk = nativeKeyOf(profile);
+
+    const tapBook = b => {
+      const locked = b.level > rank + 1;
+      if (b.readable && !locked) return onOpenBook(b.id, b.level > rank);
+      setPending(pending === b.id ? null : b.id);
+    };
+
+    return html`
+      <div className="flex h-full flex-col">
+        <header className="shrink-0 border-b border-line bg-bg">
+          <div className="gutter mx-auto flex max-w-6xl items-center gap-3 py-3">
+            <div className="flex shrink-0 items-center gap-2.5">
+              <div className="grid h-9 w-9 place-items-center rounded-[10px] bg-accent font-read text-[15px] font-semibold text-ink">S</div>
+              <span className="hidden text-[15px] font-semibold tracking-tight min-[520px]:inline">Simart</span>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              <${XpPill} rank=${rank} xp=${xp} />
+              <button type="button" onClick=${onOpenVocab}
+                className="flex h-10 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-fg transition hover:border-muted">
+                <${Icon} d=${I.stack} size=${17} /><span className="hidden sm:inline">Vocabulario</span><span className="tnum text-accent">${vocabCount}</span>
+              </button>
+              <button type="button" onClick=${onEditProfile} aria-label="Editar perfil de idiomas"
+                className="flex h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3 font-mono text-xs font-medium uppercase text-fg transition hover:border-muted">
+                ${profile.native}${profile.native === 'es' ? html`<span className="text-muted">-${profile.variant}</span>` : ''}<span className="text-muted">→</span><span className="text-accent">${profile.target}</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+          <div className="gutter mx-auto flex max-w-6xl flex-col gap-10 pb-20 pt-8 sm:pt-12">
+            <section className="grid gap-6 lg:grid-cols-[1.4fr_1fr] lg:items-end">
+              <div className="flex flex-col gap-3">
+                <span className="eyebrow">Tu camino en ${langName(profile.target).toLowerCase()}</span>
+                <h1 className="font-read text-[clamp(2rem,5.5vw,3.2rem)] font-semibold leading-[1.05] tracking-tight">
+                  Rango ${lv.rank} <span className="font-mono text-[0.55em] font-medium text-accent align-middle">${lv.code}</span>
+                </h1>
+                <p className="max-w-[52ch] text-muted">${rank === 5 ? 'Has llegado a la cima. Cualquier libro es tuyo.' : `Te faltan ${toNext} XP para ${LEVELS[rank + 1].rank}. Toca palabras nuevas, guárdalas y termina capítulos para subir.`}</p>
+              </div>
+              <dl className="grid grid-cols-3 gap-3">
+                ${[
+                  ['XP total', xp, null],
+                  ['Racha', streak.days, I.flame],
+                  ['Guardadas', vocabCount, null]
+                ].map(([label, value, icon]) => html`
+                  <div key=${label} className="flex flex-col gap-1 rounded-xl border border-line bg-surface px-4 py-3">
+                    <dt className="flex items-center gap-1 text-xs text-muted">${icon && html`<${Icon} d=${icon} size=${13} />`}${label}</dt>
+                    <dd className="tnum font-read text-2xl font-semibold">${value}${label === 'Racha' ? html`<span className="text-sm font-normal text-muted"> ${streak.days === 1 ? 'día' : 'días'}</span>` : ''}</dd>
+                  </div>`)}
+              </dl>
+            </section>
+
+            <section className="flex flex-col gap-3" aria-label="Niveles">
+              <div className="h-1.5 overflow-hidden rounded-full bg-raised"><div className="bar h-full rounded-full bg-accent" style=${{ width: ((rank + pct / 100) / 6) * 100 + '%' }}></div></div>
+              <ol className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                ${LEVELS.map((l, i) => {
+                  const state = i < rank ? 'done' : i === rank ? 'now' : i === rank + 1 ? 'next' : 'locked';
+                  return html`
+                    <li key=${l.code} className=${'flex min-w-[118px] flex-1 flex-col gap-1 rounded-xl border px-3 py-2.5 ' + (state === 'now' ? 'border-accent bg-soft' : 'border-line bg-surface')}>
+                      <span className="flex items-center justify-between">
+                        <span className=${'font-mono text-sm font-medium ' + (state === 'locked' ? 'text-muted' : 'text-fg')}>${l.code}</span>
+                        ${state === 'done' && html`<span className="text-ok"><${Icon} d=${I.check} size=${15} /></span>`}
+                        ${state === 'locked' && html`<span className="text-muted"><${Icon} d=${I.lock} size=${14} /></span>`}
+                      </span>
+                      <span className=${'text-xs font-semibold ' + (state === 'now' ? 'text-accent' : 'text-muted')}>${l.rank}</span>
+                    </li>`;
+                })}
+              </ol>
+            </section>
+
+            ${books.length === 0 ? html`
+              <section className="flex flex-col gap-2 rounded-2xl border border-dashed border-line px-6 py-10">
+                <span className="eyebrow">Catálogo en preparación</span>
+                <p className="font-read text-xl">Aún no hay libros de ${langName(profile.target).toLowerCase()} en la demo.</p>
+                <p className="max-w-[60ch] text-sm text-muted">La versión final cargará títulos de dominio público para cada nivel. Para probar la lectura ahora, cambia el idioma a inglés o francés desde tu perfil.</p>
+              </section>` :
+              LEVELS.map((l, i) => {
+                const levelBooks = books.filter(b => b.level === i);
+                if (!levelBooks.length) return null;
+                const tag = i < rank ? 'Superado' : i === rank ? 'Tu nivel' : i === rank + 1 ? 'Desafío · +50 % XP' : 'Bloqueado';
+                return html`
+                  <section key=${l.code} className="flex flex-col gap-4">
+                    <div className="flex items-baseline gap-3 border-b border-line pb-2">
+                      <h2 className="font-read text-xl font-semibold">${l.code} · ${l.rank}</h2>
+                      <span className=${'text-xs font-semibold ' + (i === rank ? 'text-accent' : i === rank + 1 ? 'text-fg' : 'text-muted')}>${tag}</span>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      ${levelBooks.map(b => {
+                        const locked = b.level > rank + 1;
+                        const done = finished.includes(b.id);
+                        const open = pending === b.id;
+                        return html`
+                          <article key=${b.id} className=${'flex flex-col overflow-hidden rounded-2xl border bg-surface transition ' + (open ? 'border-accent' : 'border-line')}>
+                            <button type="button" onClick=${() => tapBook(b)} className="flex gap-4 p-4 text-left">
+                              <span className=${'relative flex h-[104px] w-[74px] shrink-0 flex-col justify-between overflow-hidden rounded-md p-2 ' + (b.readable ? 'bg-accent text-ink' : 'bg-raised text-fg')}>
+                                <span className="font-mono text-[10px] font-medium">${l.code}</span>
+                                <span className="font-read text-[11px] font-semibold leading-tight line-clamp-4">${b.title}</span>
+                                <span className="flex gap-0.5">${LEVELS.map((_, k) => html`<span key=${k} className=${'h-1 flex-1 rounded-sm ' + (k <= i ? (b.readable ? 'bg-ink' : 'bg-accent') : (b.readable ? 'bg-ink opacity-20' : 'bg-line'))}></span>`)}</span>
+                                ${locked && html`<span className="absolute inset-0 grid place-items-center bg-black/60 text-fg"><${Icon} d=${I.lock} /></span>`}
+                              </span>
+                              <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                                <span className="font-read text-[17px] font-semibold leading-snug text-fg">${b.title}</span>
+                                <span className="text-xs text-muted">${b.author} · ${b.year}</span>
+                                <span className="text-sm leading-snug text-muted line-clamp-2">${b.blurb}</span>
+                                <span className="mt-auto flex flex-wrap gap-1.5 pt-1">
+                                  ${done ? html`<${Chip} tone="ok"><${Icon} d=${I.check} size=${12} /> Leído<//>` : b.readable ? html`<${Chip} tone="accent">Leer ahora<//>` : html`<${Chip}>Próximamente<//>`}
+                                  ${b.author === LT && html`<${Chip}>Original<//>`}
+                                </span>
+                              </span>
+                            </button>
+                            ${open && html`
+                              <div className="rise flex flex-col gap-3 border-t border-line px-4 py-3.5">
+                                ${b.readable ? html`
+                                  <p className="text-sm text-fg">Este libro está por encima de tu nivel. Ábrelo como desafío y ganarás +50 % de XP.</p>
+                                  <div className="flex gap-2">
+                                    <button type="button" onClick=${() => onOpenBook(b.id, true)} className="h-10 flex-1 rounded-lg bg-accent text-sm font-semibold text-ink">Aceptar desafío</button>
+                                    <button type="button" onClick=${() => setPending(null)} className="h-10 rounded-lg border border-line px-4 text-sm font-semibold text-muted">Cancelar</button>
+                                  </div>` : html`
+                                  <p className="text-sm text-muted">${locked ? `Se desbloquea al llegar a ${LEVELS[b.level - 1].code}. ` : ''}Este título llegará cuando conectemos el catálogo completo de dominio público.</p>`}
+                              </div>`}
+                          </article>`;
+                      })}
+                    </div>
+                  </section>`;
+              })}
+            <p className="text-xs text-muted">Pronunciación adaptada para: ${NATIVE_LABEL[nk] || langName(profile.native)}.</p>
+          </div>
+        </main>
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * Word detail
+   * ================================================================== */
+  function WordDetail({ lang, selection, profile, prefs, setPrefs, decks, savedItem, onSave }) {
+    if (!selection) {
+      return html`
+        <div className="flex h-full flex-col items-start justify-center gap-3 px-6 py-10">
+          <span className="eyebrow">Diccionario contextual</span>
+          <p className="font-read text-xl leading-snug text-fg">Toca cualquier palabra del texto.</p>
+          <p className="max-w-[34ch] text-sm leading-relaxed text-muted">Verás cómo suena en tu idioma, su traducción, la frase donde aparece, y podrás escucharla más despacio.</p>
+        </div>`;
+    }
+    const entry = lookup(lang, selection.key);
+    const nk = nativeKeyOf(profile);
+    const sameLang = profile.native === lang;
+    const resp = entry && !sameLang ? respell(entry.ipa, nk, lang) : null;
+    const rate = prefs.speed;
+    const contexts = [
+      { label: 'En este libro', src: selection.sentence, es: null },
+      entry && { label: 'Otro ejemplo', src: entry.exSrc, es: entry.exEs }
+    ].filter(Boolean);
+
+    return html`
+      <div key=${selection.id} className="rise flex flex-col gap-6 px-6 pb-8 pt-6">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            ${entry ? html`<${Chip}>${entry.pos}<//>` : html`<${Chip}>sin entrada<//>`}
+            ${entry && entry.cefr !== '—' && html`<${Chip} tone="accent">Nivel ${entry.cefr}<//>`}
+          </div>
+          <h2 className="min-w-0 break-words font-read text-[2.4rem] font-semibold leading-none text-fg">${selection.key}</h2>
+          ${entry && html`<p className="font-mono text-sm text-muted">/${entry.ipa}/</p>`}
+          ${selection.surface.toLowerCase() !== selection.key && html`
+            <p className="text-xs text-muted">Forma en el texto: <span className="font-mono text-fg">${selection.surface}</span></p>`}
+        </div>
+
+        ${canSpeak && html`
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick=${() => speak(selection.key, lang, rate)}
+              className="flex h-11 items-center gap-2 rounded-xl bg-raised px-4 text-sm font-semibold text-fg transition hover:text-accent" aria-label=${'Escuchar ' + selection.key}>
+              <${Icon} d=${I.speaker} /> Escuchar
+            </button>
+            <button type="button" onClick=${() => speak(selection.key, lang, 0.45)}
+              className="flex h-11 items-center gap-2 rounded-xl border border-line px-3 text-sm font-semibold text-muted transition hover:text-fg" aria-label="Escuchar muy despacio">
+              <${Icon} d=${I.slow} /> Lento
+            </button>
+            <${SpeedControl} speed=${prefs.speed} setSpeed=${s => setPrefs({ ...prefs, speed: s })} />
+          </div>`}
+
+        ${entry && !sameLang && html`
+          <div className="flex flex-col gap-3 rounded-2xl border border-line p-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="eyebrow">Cómo suena para ti</span>
+              <span className="text-[11px] font-semibold text-muted">${NATIVE_LABEL[nk] || langName(profile.native)}</span>
+            </div>
+            ${resp ? html`
+              <${Respelling} ipa=${entry.ipa} nativeKey=${nk} targetLang=${lang} />
+              <p className="text-xs text-muted">Lee en voz alta como en tu idioma. La sílaba subrayada es la fuerte.</p>
+              ${resp.tips.length > 0 && html`
+                <ul className="flex flex-col gap-2 border-t border-line pt-3">
+                  ${resp.tips.map(t => html`
+                    <li key=${t.ipa} className="flex gap-3 text-sm leading-relaxed">
+                      <span className="w-10 shrink-0 pt-px font-mono text-xs text-accent">/${t.ipa}/</span>
+                      <span className="text-fg">${t.text}</span>
+                    </li>`)}
+                </ul>`}` : html`
+              <p className="text-sm text-muted">Aún no tenemos transcripción adaptada para ${langName(profile.native).toLowerCase()}. Usa la fonética IPA y el audio.</p>`}
+          </div>`}
+
+        <div className="flex flex-col gap-2 border-y border-line py-5">
+          <span className="eyebrow">Traducción</span>
+          <p className="font-read text-2xl leading-snug text-accent">${entry ? entry.translation : 'Sin entrada en el diccionario de la demo'}</p>
+          ${entry && entry.note && html`<p className="text-sm leading-relaxed text-muted">${entry.note}</p>`}
+          ${profile.native !== 'es' && html`<p className="text-xs text-muted">En la demo las traducciones están en español. La versión final las mostrará en ${langName(profile.native).toLowerCase()}.</p>`}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <span className="eyebrow">Contexto</span>
+          ${contexts.map((c, i) => html`
+            <figure key=${i} className="flex flex-col gap-1.5 rounded-xl bg-raised p-4">
+              <figcaption className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
+                ${c.label}
+                ${canSpeak && html`<button type="button" onClick=${() => speak(c.src, lang, rate)} className="grid h-8 w-8 place-items-center rounded-lg normal-case text-muted transition hover:text-accent" aria-label="Escuchar frase"><${Icon} d=${I.speaker} size=${16} /></button>`}
+              </figcaption>
+              <blockquote className="font-read text-[15px] leading-relaxed text-fg"><${Highlight} text=${c.src} term=${selection.surface.length > 1 ? selection.surface : selection.key} /></blockquote>
+              ${c.es && html`<p className="text-sm text-muted">${c.es}</p>`}
+            </figure>`)}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="eyebrow">${savedItem ? 'Guardada en' : 'Guardar en mi vocabulario'}</span>
+            ${savedItem && html`<button type="button" onClick=${() => onSave(null)} className="text-xs font-semibold text-muted underline-offset-2 hover:text-fg hover:underline">Quitar</button>`}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            ${decks.map(d => {
+              const active = savedItem && savedItem.deck === d.id;
+              return html`
+                <button key=${d.id} type="button" onClick=${() => onSave(active ? null : d.id)} aria-pressed=${!!active}
+                  className=${'flex min-h-[44px] items-center gap-2 rounded-xl px-3.5 text-sm font-semibold transition ' +
+                    (active ? 'bg-accent text-ink' : 'border border-line text-fg hover:border-accent hover:text-accent')}>
+                  ${active ? html`<${Icon} d=${I.check} size=${16} />` : html`<${Icon} d=${I.plus} size=${16} />`}${d.name}
+                </button>`;
+            })}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * Saved vocabulary, grouped in practice sections
+   * ================================================================== */
+  function VocabPanel({ vocab, setVocab, decks, setDecks, profile, rate, onOpen }) {
+    const [filter, setFilter] = useState('all');
+    const [newName, setNewName] = useState('');
+    const nk = nativeKeyOf(profile);
+    const items = vocab.filter(v => filter === 'all' || v.deck === filter).slice().sort((a, b) => b.savedAt - a.savedAt);
+    const count = id => vocab.filter(v => v.deck === id).length;
+
+    const addDeck = e => {
+      e.preventDefault();
+      const name = newName.trim();
+      if (!name) return;
+      const id = 'd' + Date.now().toString(36);
+      setDecks([...decks, { id, name }]);
+      setFilter(id);
+      setNewName('');
+    };
+    const removeDeck = id => {
+      setVocab(vocab.map(v => (v.deck === id ? { ...v, deck: 'later' } : v)));
+      setDecks(decks.filter(d => d.id !== id));
+      setFilter('all');
+    };
+
+    return html`
+      <div className="flex flex-col gap-5 px-6 pb-8 pt-5">
+        <div className="flex items-start gap-3 rounded-xl bg-raised px-4 py-3">
+          <span className="pt-0.5 text-accent"><${Icon} d=${I.stack} size=${16} /></span>
+          <p className="text-sm leading-relaxed text-muted"><span className="font-semibold text-fg">Secciones de práctica.</span> Cada sección será un mazo del juego de repaso, que llegará en la próxima versión.</p>
+        </div>
+
+        <div className="no-scrollbar -mx-6 flex gap-2 overflow-x-auto px-6">
+          ${[{ id: 'all', name: 'Todas' }, ...decks].map(d => html`
+            <button key=${d.id} type="button" onClick=${() => setFilter(d.id)}
+              className=${'flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition ' + (filter === d.id ? 'bg-fg text-bg' : 'border border-line text-muted hover:text-fg')}>
+              ${d.name}<span className="tnum opacity-70">${d.id === 'all' ? vocab.length : count(d.id)}</span>
+            </button>`)}
+        </div>
+
+        <form onSubmit=${addDeck} className="flex gap-2">
+          <label htmlFor="new-deck" className="sr-only">Nombre de la nueva sección</label>
+          <input id="new-deck" value=${newName} onInput=${e => setNewName(e.target.value)} maxLength="32" placeholder="Nueva sección, p. ej. Verbos"
+            className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-bg px-3 text-sm text-fg placeholder:text-muted" />
+          <button type="submit" disabled=${!newName.trim()} className="flex h-10 items-center gap-1.5 rounded-lg border border-line px-3 text-sm font-semibold text-fg transition hover:border-accent disabled:opacity-40">
+            <${Icon} d=${I.plus} size=${16} /> Crear
+          </button>
+        </form>
+
+        ${filter !== 'all' && !DEFAULT_DECKS.some(d => d.id === filter) && html`
+          <button type="button" onClick=${() => removeDeck(filter)} className="self-start text-xs font-semibold text-muted hover:text-fg">Eliminar esta sección (sus palabras pasan a «Repasar más tarde»)</button>`}
+
+        ${items.length === 0 ? html`
+          <div className="flex flex-col gap-2 rounded-xl border border-dashed border-line px-5 py-8">
+            <p className="font-read text-lg text-fg">No hay palabras aquí todavía.</p>
+            <p className="text-sm leading-relaxed text-muted">Toca una palabra mientras lees y elige en qué sección guardarla.</p>
+          </div>` : html`
+          <ul className="flex flex-col divide-y divide-line">
+            ${items.map(v => html`
+              <li key=${v.id} className="flex flex-col gap-2 py-3.5">
+                <div className="flex items-start gap-2">
+                  <button type="button" onClick=${() => onOpen && onOpen(v)} className="group flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+                    <span className="flex w-full items-baseline gap-2">
+                      <span className="font-read text-lg font-semibold text-fg group-hover:text-accent">${v.key}</span>
+                      <span className="ml-auto shrink-0 font-mono text-[10px] uppercase text-muted">${v.lang}</span>
+                    </span>
+                    ${v.ipa && profile.native !== v.lang && html`<${Respelling} ipa=${v.ipa} nativeKey=${nk} targetLang=${v.lang} size="sm" />`}
+                    <span className="text-sm text-accent">${v.translation}</span>
+                  </button>
+                  ${canSpeak && html`
+                    <button type="button" onClick=${() => speak(v.key, v.lang, rate)} aria-label=${'Escuchar ' + v.key}
+                      className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-raised hover:text-fg"><${Icon} d=${I.speaker} size=${16} /></button>`}
+                  <button type="button" onClick=${() => setVocab(vocab.filter(x => x.id !== v.id))} aria-label=${'Quitar ' + v.key}
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-raised hover:text-fg"><${Icon} d=${I.trash} size=${16} /></button>
+                </div>
+                <p className="line-clamp-2 font-read text-[13px] leading-snug text-muted"><${Highlight} text=${v.context} term=${v.surface} /></p>
+                <label className="flex items-center gap-2 text-xs text-muted">
+                  Sección
+                  <select id=${'deck-' + v.id} value=${v.deck} onChange=${e => setVocab(vocab.map(x => (x.id === v.id ? { ...x, deck: e.target.value } : x)))}
+                    className="h-8 rounded-md border border-line bg-bg px-2 text-xs font-semibold text-fg">
+                    ${decks.map(d => html`<option key=${d.id} value=${d.id}>${d.name}</option>`)}
+                  </select>
+                </label>
+              </li>`)}
+          </ul>`}
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * Panel shell & hosts
+   * ================================================================== */
+  function PanelShell({ tabs, tab, setTab, onClose, children }) {
+    return html`
+      <div className="flex h-full flex-col bg-surface">
+        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+          ${tabs.length > 1 ? html`
+            <div className="flex flex-1 rounded-xl bg-bg p-1 text-sm font-semibold" role="tablist">
+              ${tabs.map(t => html`
+                <button key=${t.id} type="button" role="tab" aria-selected=${tab === t.id} onClick=${() => setTab(t.id)}
+                  className=${'flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 transition ' + (tab === t.id ? 'bg-raised text-fg' : 'text-muted hover:text-fg')}>
+                  ${t.label}${t.count != null && html`<span className="tnum rounded-full bg-soft px-1.5 text-[11px] text-accent">${t.count}</span>`}
+                </button>`)}
+            </div>` : html`<span className="flex-1 px-1 font-semibold">${tabs[0].label}</span>`}
+          <button type="button" onClick=${onClose} aria-label="Cerrar panel"
+            className="grid h-10 w-10 place-items-center rounded-xl text-muted transition hover:bg-raised hover:text-fg"><${Icon} d=${I.close} /></button>
+        </div>
+        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain">${children}</div>
+      </div>`;
+  }
+
+  function BottomSheet({ open, onClose, children, full }) {
+    return html`
+      <div className=${'fade fixed inset-0 z-30 bg-black/60 ' + (full ? '' : 'lg:hidden ') + (open ? 'opacity-100' : 'pointer-events-none opacity-0')} onClick=${onClose} aria-hidden="true"></div>
+      <section className=${'sheet fixed inset-x-0 bottom-0 z-40 mx-auto flex h-[78dvh] max-w-2xl flex-col overflow-hidden rounded-t-[22px] border border-b-0 border-line bg-surface ' +
+          (full ? 'lg:inset-y-0 lg:left-auto lg:right-0 lg:mx-0 lg:h-full lg:w-[420px] lg:max-w-none lg:rounded-none lg:border-y-0 lg:border-r-0 ' : 'lg:hidden ') +
+          (open ? 'translate-y-0 lg:translate-x-0' : 'translate-y-[105%] ' + (full ? 'lg:translate-y-0 lg:translate-x-full' : ''))}
+        style=${{ paddingBottom: 'env(safe-area-inset-bottom, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}
+        aria-hidden=${!open}>
+        <div className=${'flex justify-center pt-2.5 ' + (full ? 'lg:hidden' : '')}><span className="h-1 w-10 rounded-full bg-line"></span></div>
+        <div className="min-h-0 flex-1">${children}</div>
+      </section>`;
+  }
+
+  /* ================================================================== *
+   * Reader
+   * ================================================================== */
+  function Reader({ bookId, profile, prefs, setPrefs, vocab, setVocab, decks, setDecks, looked, setLooked, finished, award, onFinish, onBack, rank, xp, challenge }) {
+    const book = BOOKS[bookId];
+    const meta = findMeta(bookId);
+    const lang = book.lang;
+    const [selection, setSelection] = useState(null);
+    const [panelOpen, setPanelOpen] = useState(false);
+    const [tab, setTab] = useState('word');
+    const [progress, setProgress] = useState(0);
+    const scrollRef = useRef(null);
+    const parsed = useMemo(() => parseBook(book.paragraphs), [book]);
+    const uniqueKeys = useMemo(() => {
+      const s = new Set();
+      parsed.paragraphs.forEach(p => p.forEach(sn => sn.tokens.forEach(t => t.type === 'word' && s.add(toKey(t.text, lang)))));
+      return s;
+    }, [parsed, lang]);
+    const savedKeys = useMemo(() => new Set(vocab.filter(v => v.lang === lang).map(v => v.key)), [vocab, lang]);
+    const isDone = finished.includes(bookId);
+
+    const measure = useCallback(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const max = el.scrollHeight - el.clientHeight;
+      setProgress(max <= 2 ? 1 : Math.min(1, el.scrollTop / max));
+    }, []);
+    useEffect(() => {
+      measure();
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }, [prefs.size, panelOpen, measure]);
+    useEffect(() => {
+      const onKey = e => { if (e.key === 'Escape') setPanelOpen(false); };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, []);
+
+    const selectWord = (token, sentence) => {
+      const key = toKey(token.text, lang);
+      setSelection({ id: token.id, key, surface: token.text, sentence });
+      setTab('word');
+      setPanelOpen(true);
+      if (prefs.autoplay) speak(key, lang, prefs.speed);
+      const lk = `${lang}:${key}`;
+      if (!looked.includes(lk) && lookup(lang, key)) { setLooked([...looked, lk]); award(2, 'palabra nueva'); }
+    };
+
+    const savedItem = selection ? vocab.find(v => v.id === `${lang}:${selection.key}`) : null;
+    const onSave = deckId => {
+      if (!selection) return;
+      const id = `${lang}:${selection.key}`;
+      if (deckId == null) { setVocab(vocab.filter(v => v.id !== id)); return; }
+      if (savedItem) { setVocab(vocab.map(v => (v.id === id ? { ...v, deck: deckId } : v))); return; }
+      const entry = lookup(lang, selection.key);
+      setVocab([...vocab, {
+        id, lang, key: selection.key, surface: selection.surface, deck: deckId,
+        ipa: entry ? entry.ipa : '', translation: entry ? entry.translation : 'Traducción pendiente',
+        pos: entry ? entry.pos : '', context: selection.sentence, book: meta.title, savedAt: Date.now()
+      }]);
+      award(5, 'palabra guardada');
+    };
+
+    const openFromVocab = v => {
+      if (v.lang !== lang) return speak(v.key, v.lang, prefs.speed);
+      setSelection({ id: 'vocab-' + v.id, key: v.key, surface: v.surface, sentence: v.context });
+      setTab('word');
+    };
+
+    const toggleVocab = () => {
+      if (panelOpen && tab === 'vocab') setPanelOpen(false);
+      else { setTab('vocab'); setPanelOpen(true); }
+    };
+
+    const chapterPct = Math.round(progress * 100);
+    const lvl = LEVELS[meta.level];
+
+    const panel = html`
+      <${PanelShell} tabs=${[{ id: 'word', label: 'Palabra' }, { id: 'vocab', label: 'Vocabulario', count: vocab.length }]} tab=${tab} setTab=${setTab} onClose=${() => setPanelOpen(false)}>
+        ${tab === 'word'
+          ? html`<${WordDetail} lang=${lang} selection=${selection} profile=${profile} prefs=${prefs} setPrefs=${setPrefs} decks=${decks} savedItem=${savedItem} onSave=${onSave} />`
+          : html`<${VocabPanel} vocab=${vocab} setVocab=${setVocab} decks=${decks} setDecks=${setDecks} profile=${profile} rate=${prefs.speed} onOpen=${openFromVocab} />`}
+      <//>`;
+
+    return html`
+      <div className="flex h-full flex-col">
+        <header className="relative z-20 shrink-0 border-b border-line bg-bg">
+          <div className="gutter flex items-center gap-2 py-3 sm:gap-4">
+            <button type="button" onClick=${onBack} aria-label="Volver a la biblioteca"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-surface text-fg transition hover:border-muted"><${Icon} d=${I.back} /></button>
+
+            <div className="hidden min-w-0 flex-1 flex-col gap-1.5 md:flex">
+              <div className="flex items-baseline gap-2 text-sm">
+                <span className="truncate font-read italic text-fg">${meta.title}</span>
+                <span className="shrink-0 text-muted">·</span>
+                <span className="tnum shrink-0 text-muted">Cap. ${ROMAN[book.chapterIndex]} · ${chapterPct} %</span>
+                ${challenge && html`<span className="shrink-0 text-xs font-semibold text-accent">Desafío ×1,5</span>`}
+              </div>
+              <div className="h-1 w-full max-w-md overflow-hidden rounded-full bg-raised" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${chapterPct} aria-label="Progreso del capítulo">
+                <div className="bar h-full rounded-full bg-accent" style=${{ width: chapterPct + '%' }}></div>
+              </div>
+            </div>
+
+            <div className="ml-auto flex items-center gap-2">
+              <div className="hidden min-[560px]:block"><${XpPill} rank=${rank} xp=${xp} /></div>
+              <div className="flex h-10 items-center rounded-xl border border-line bg-surface" role="group" aria-label="Tamaño de letra">
+                <button type="button" onClick=${() => setPrefs({ ...prefs, size: Math.max(0, prefs.size - 1) })} disabled=${prefs.size === 0}
+                  className="h-full px-3 font-read text-sm text-fg transition hover:text-accent disabled:opacity-30" aria-label="Reducir letra">A</button>
+                <span className="h-5 w-px bg-line"></span>
+                <button type="button" onClick=${() => setPrefs({ ...prefs, size: Math.min(SIZES.length - 1, prefs.size + 1) })} disabled=${prefs.size === SIZES.length - 1}
+                  className="h-full px-3 font-read text-lg leading-none text-fg transition hover:text-accent disabled:opacity-30" aria-label="Aumentar letra">A</button>
+              </div>
+              <button type="button" onClick=${() => setPrefs({ ...prefs, autoplay: !prefs.autoplay })} aria-pressed=${prefs.autoplay}
+                title=${prefs.autoplay ? 'Sonido al tocar: activado' : 'Sonido al tocar: desactivado'}
+                className=${'grid h-10 w-10 place-items-center rounded-xl border transition ' + (prefs.autoplay ? 'border-accent bg-soft text-accent' : 'border-line bg-surface text-muted')}
+                aria-label="Reproducir sonido al tocar una palabra"><${Icon} d=${I.speaker} size=${17} /></button>
+              <button type="button" onClick=${toggleVocab} aria-pressed=${panelOpen && tab === 'vocab'}
+                className=${'flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ' +
+                  (panelOpen && tab === 'vocab' ? 'border-accent bg-soft text-accent' : 'border-line bg-surface text-fg hover:border-muted')}>
+                <${Icon} d=${I.stack} size=${17} /><span className="tnum text-accent">${vocab.length}</span>
+              </button>
+            </div>
+          </div>
+          <div className="absolute inset-x-0 bottom-0 h-[2px] md:hidden"><div className="bar h-full bg-accent" style=${{ width: chapterPct + '%' }}></div></div>
+        </header>
+
+        <div className="flex min-h-0 flex-1">
+          <main ref=${scrollRef} onScroll=${measure} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
+            <article className="gutter mx-auto w-full max-w-[44rem] pb-24 pt-10 sm:pt-14">
+              <div className="mb-10 flex flex-col gap-3">
+                <span className="eyebrow">${lvl.code} · ${lvl.rank} · Capítulo ${ROMAN[book.chapterIndex]} de ${ROMAN[book.chapters - 1]}</span>
+                <h1 className="font-read text-[clamp(1.9rem,5vw,2.75rem)] font-semibold leading-[1.1] tracking-tight">${book.chapterTitle}</h1>
+                <p className="text-sm text-muted">${meta.title} · ${meta.author} · ${meta.year}</p>
+              </div>
+
+              <div className="prose-reader flex flex-col text-fg" style=${{ fontSize: SIZES[prefs.size] + 'px' }} lang=${lang}>
+                ${parsed.paragraphs.map((sentences, pi) => html`
+                  <p key=${pi}>
+                    ${sentences.map(s => s.tokens.map(t => {
+                      if (t.type === 'gap') return t.text;
+                      const k = toKey(t.text, lang);
+                      const isSel = selection && selection.id === t.id;
+                      const cls = ['word', isSel && 'is-selected', !isSel && selection && selection.key === k && 'is-match', savedKeys.has(k) && 'is-saved'].filter(Boolean).join(' ');
+                      return html`<span key=${t.id} role="button" tabIndex="0" className=${cls}
+                        onClick=${() => selectWord(t, s.text)}
+                        onKeyDown=${e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectWord(t, s.text); } }}>${t.text}</span>`;
+                    }))}
+                  </p>`)}
+              </div>
+
+              <footer className="mt-14 flex flex-col gap-5 border-t border-line pt-6">
+                <span className="eyebrow">Fin del fragmento de muestra</span>
+                <dl className="grid grid-cols-3 gap-4">
+                  ${[['Palabras', parsed.words], ['Únicas', uniqueKeys.size], ['Guardadas', [...savedKeys].filter(k => uniqueKeys.has(k)).length]].map(([label, value]) => html`
+                    <div key=${label} className="flex flex-col gap-1">
+                      <dt className="text-xs text-muted">${label}</dt>
+                      <dd className="tnum font-read text-2xl font-semibold">${value}</dd>
+                    </div>`)}
+                </dl>
+                <button type="button" disabled=${isDone} onClick=${() => onFinish(bookId)}
+                  className=${'flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold transition ' + (isDone ? 'border border-line text-ok' : 'bg-accent text-ink hover:brightness-110')}>
+                  ${isDone ? html`<${Icon} d=${I.check} /> Capítulo completado` : `Marcar capítulo como leído · +${challenge ? 60 : 40} XP`}
+                </button>
+              </footer>
+            </article>
+          </main>
+
+          <aside className="side hidden shrink-0 overflow-hidden border-l border-line lg:block" style=${{ width: panelOpen ? 400 : 0, borderLeftWidth: panelOpen ? 1 : 0 }} aria-hidden=${!panelOpen}>
+            <div className="h-full w-[400px]">${panel}</div>
+          </aside>
+        </div>
+
+        <${BottomSheet} open=${panelOpen} onClose=${() => setPanelOpen(false)}>${panel}<//>
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * App
+   * ================================================================== */
+  function App() {
+    const [profile, setProfile] = usePersist('lt.profile', null);
+    const [view, setView] = useState(() => (store.get('lt.profile', null) ? 'library' : 'onboarding'));
+    const [bookId, setBookId] = useState(null);
+    const [challenge, setChallenge] = useState(false);
+    const [vocab, setVocab] = usePersist('lt.vocab.v2', []);
+    const [decks, setDecks] = usePersist('lt.decks', DEFAULT_DECKS);
+    const [xp, setXp] = usePersist('lt.xp', 0);
+    const [looked, setLooked] = usePersist('lt.looked', []);
+    const [finished, setFinished] = usePersist('lt.finished', []);
+    const [streak, setStreak] = usePersist('lt.streak', { days: 0, last: null });
+    const [prefs, setPrefs] = usePersist('lt.prefs', { speed: 1, autoplay: true, size: 1 });
+    const [vocabOpen, setVocabOpen] = useState(false);
+    const [toast, setToast] = useState(null);
+
+    const rank = rankFor(profile, xp);
+
+    useEffect(() => {
+      if (!toast) return;
+      const t = setTimeout(() => setToast(null), 1800);
+      return () => clearTimeout(t);
+    }, [toast]);
+
+    const award = useCallback((base, label) => {
+      const amount = Math.round(base * (challenge && view === 'reader' ? 1.5 : 1));
+      const before = rankFor(profile, xp);
+      const after = rankFor(profile, xp + amount);
+      setXp(xp + amount);
+      setToast(after > before
+        ? { id: Date.now(), xp: `¡Subiste a ${LEVELS[after].code}!`, text: LEVELS[after].rank }
+        : { id: Date.now(), xp: `+${amount} XP`, text: label });
+      const d = today();
+      if (streak.last !== d) setStreak({ days: streak.last === yesterday() ? streak.days + 1 : 1, last: d });
+    }, [challenge, view, profile, xp, streak]);
+
+    const onFinish = id => {
+      if (finished.includes(id)) return;
+      setFinished([...finished, id]);
+      award(40, 'capítulo completado');
+    };
+
+    let content;
+    if (view === 'onboarding' || !profile) {
+      content = html`<${Onboarding} initial=${profile} onCancel=${profile ? () => setView('library') : null}
+        onDone=${p => { setProfile(p); setView('library'); }} />`;
+    } else if (view === 'reader' && bookId) {
+      content = html`<${Reader} bookId=${bookId} profile=${profile} prefs=${prefs} setPrefs=${setPrefs}
+        vocab=${vocab} setVocab=${setVocab} decks=${decks} setDecks=${setDecks}
+        looked=${looked} setLooked=${setLooked} finished=${finished} award=${award} onFinish=${onFinish}
+        rank=${rank} xp=${xp} challenge=${challenge} onBack=${() => setView('library')} />`;
+    } else {
+      content = html`
+        <${Library} profile=${profile} rank=${rank} xp=${xp} streak=${streak} vocabCount=${vocab.length} finished=${finished}
+          onOpenBook=${(id, isChallenge) => { setBookId(id); setChallenge(isChallenge); setView('reader'); }}
+          onEditProfile=${() => setView('onboarding')} onOpenVocab=${() => setVocabOpen(true)} />
+        <${BottomSheet} open=${vocabOpen} onClose=${() => setVocabOpen(false)} full=${true}>
+          <${PanelShell} tabs=${[{ id: 'vocab', label: 'Mi vocabulario' }]} tab="vocab" setTab=${() => {}} onClose=${() => setVocabOpen(false)}>
+            <${VocabPanel} vocab=${vocab} setVocab=${setVocab} decks=${decks} setDecks=${setDecks} profile=${profile} rate=${prefs.speed} />
+          <//>
+        <//>`;
+    }
+
+    return html`${content}<${Toast} toast=${toast} />`;
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(html`<${App} />`);
+})();
+</script>
+
+</body>
+</html>
