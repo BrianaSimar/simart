@@ -514,7 +514,13 @@
   const findMeta = id => Object.values(CATALOG).flat().find(b => b.id === id);
   const ROMAN = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
   const SIZES = [17, 19, 21, 24];
-  const SPEEDS = [0.5, 0.75, 1];
+  const SPEEDS = [
+    { rate: 1, label: 'Normal' },
+    { rate: 0.8, label: 'Lento medio' },
+    { rate: 0.6, label: 'Lento' },
+    { rate: 0.4, label: 'Súper lento' }
+  ];
+  const nearestSpeed = r => SPEEDS.reduce((a, b) => (Math.abs(b.rate - r) < Math.abs(a.rate - r) ? b : a)).rate;
 
   /* ================================================================== *
    * Phonology: IPA → approximate spelling in the reader's native language
@@ -697,20 +703,31 @@
       const syl = syllabify(ph);
       let stressed = syl.findIndex(sy => sy.some(x => x.stress));
       if (stressed < 0 && targetLang === 'fr' && syl.length > 1) stressed = syl.length - 1;
-      return syl.map((sy, si) => ({
-        stressed: syl.length > 1 && si === stressed,
-        parts: sy.map(x => {
+      return syl.map((sy, si) => {
+        const local = new Map();
+        const parts = sy.map(x => {
           const idx = ph.indexOf(x);
           const r = renderPhoneme(table, x.p, ph[idx + 1]);
           const base = x.p.replace('ː', '');
           for (const key of [tipKey(x.p), tipKey(base)]) {
             const text = override[key] || (needs.has(key) ? TIP[key] : null);
-            if (text && !tips.has(key)) tips.set(key, { ipa: key === 'nasal' ? x.p : key, spelled: r.t, text });
+            if (!text) continue;
+            const tip = { ipa: key === 'nasal' ? x.p : key, spelled: r.t, text };
+            if (!tips.has(key)) tips.set(key, tip);
+            if (!local.has(key)) local.set(key, tip);
           }
           if (x.p.includes('ː') && needs.has('ː') && !tips.has('ː')) tips.set('ː', { ipa: 'ː', spelled: r.t, text: TIP['ː'] });
           return r;
-        })
-      }));
+        });
+        return {
+          stressed: syl.length > 1 && si === stressed,
+          parts,
+          text: parts.map(p => p.t).join(''),
+          hasForeign: parts.some(p => p.mark),
+          ipa: sy.map(x => x.p).join(''),
+          tips: [...local.values()]
+        };
+      });
     });
     return { words, tips: [...tips.values()] };
   }
@@ -757,18 +774,111 @@
     return { ipa: t[0], translation: t[1], pos: t[2], cefr: t[3], exSrc: t[4], exEs: t[5], note: t[6] || null };
   }
 
+  /* ================================================================== *
+   * Voice engine — two original Simart voices built on the device's
+   * best available voices, with pitch and pacing tuned for teaching.
+   * ================================================================== */
   const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
   const VOICE_FOR = { en: 'en-US', fr: 'fr-FR', es: 'es-ES', pt: 'pt-BR', it: 'it-IT', de: 'de-DE' };
-  function speak(text, lang, rate) {
-    try {
-      if (!canSpeak) return;
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = VOICE_FOR[lang] || lang;
-      u.rate = rate || 1;
-      window.speechSynthesis.speak(u);
-    } catch { /* speech unavailable */ }
+  const NATIVE_VOICE = { 'es-LA': ['es-MX', 'es-US', 'es-419', 'es-CO', 'es-AR', 'es'], 'es-ES': ['es-ES', 'es'], en: ['en-US', 'en'], pt: ['pt-BR', 'pt'], it: ['it-IT', 'it'], fr: ['fr-FR', 'fr'] };
+
+  const PERSONAS = {
+    male: {
+      id: 'male', name: 'Atlas', gender: 'Voz masculina',
+      traits: 'Grave, cálida y pausada. Habla con calma y seguridad.',
+      pitch: 0.82, pace: 0.94,
+      hints: /\b(evan|nathan|aaron|alex|tom|fred|daniel|guy|davis|christopher|eric|roger|andrew|brian|tony|jason|ryan|thomas|jorge|diego|juan|carlos|pablo|luca|felipe|reed|rocko|grandpa|male|man|hombre)\b/i
+    },
+    female: {
+      id: 'female', name: 'Vela', gender: 'Voz femenina',
+      traits: 'Suave, aterciopelada y clara. Cercana y fácil de seguir.',
+      pitch: 1.0, pace: 0.96,
+      hints: /\b(ava|samantha|allison|susan|zoe|nicky|joelle|jenny|aria|michelle|emma|sara|karen|moira|tessa|serena|kate|victoria|amélie|amelie|audrey|paulina|mónica|monica|luciana|alice|female|woman|mujer|google us english)\b/i
+    }
+  };
+  const QUALITY_RE = /(premium|enhanced|natural|neural|mejorada|améliorée|online|siri)/i;
+
+  let voiceCache = [];
+  function loadVoices() {
+    try { voiceCache = canSpeak ? window.speechSynthesis.getVoices() : []; } catch { voiceCache = []; }
+    return voiceCache;
   }
+  if (canSpeak) {
+    loadVoices();
+    try { window.speechSynthesis.addEventListener('voiceschanged', loadVoices); } catch { /* old Safari */ }
+  }
+
+  function useVoices() {
+    const [list, setList] = useState(() => loadVoices());
+    useEffect(() => {
+      if (!canSpeak) return;
+      const update = () => setList(loadVoices().slice());
+      update();
+      const t = setTimeout(update, 600);
+      try { window.speechSynthesis.addEventListener('voiceschanged', update); } catch { /* ignore */ }
+      return () => { clearTimeout(t); try { window.speechSynthesis.removeEventListener('voiceschanged', update); } catch { /* ignore */ } };
+    }, []);
+    return list;
+  }
+
+  /** Picks the best device voice for a language and persona. */
+  function pickVoice(langTags, personaId, exactName) {
+    const voices = voiceCache.length ? voiceCache : loadVoices();
+    if (!voices.length) return null;
+    if (exactName) { const v = voices.find(x => x.name === exactName); if (v) return v; }
+    const tags = (Array.isArray(langTags) ? langTags : [langTags]).map(t => t.toLowerCase());
+    const persona = PERSONAS[personaId];
+    const other = PERSONAS[personaId === 'male' ? 'female' : 'male'];
+    let best = null, bestScore = -Infinity;
+    for (const v of voices) {
+      const lang = (v.lang || '').toLowerCase().replace('_', '-');
+      const li = tags.findIndex(t => lang === t || lang.startsWith(t + '-') || (t.length === 2 && lang.startsWith(t)));
+      if (li < 0) continue;
+      let score = 40 - li * 6;
+      if (QUALITY_RE.test(v.name)) score += 25;
+      if (persona && persona.hints.test(v.name)) score += 30;
+      if (persona && other.hints.test(v.name)) score -= 30;
+      if (v.localService) score += 3;
+      if (score > bestScore) { best = v; bestScore = score; }
+    }
+    return best;
+  }
+
+  // Current voice settings, kept in sync with the user's preferences by <Main>.
+  let VOICE = { persona: 'female', deviceVoice: '' };
+  const setVoicePrefs = p => { VOICE = { persona: p.voice || 'female', deviceVoice: p.deviceVoice || '' }; };
+
+  let speakToken = 0;
+  /** Speaks text and resolves when it ends (or is cancelled). opts: { native, rate, persona, onBoundary } */
+  function speak(text, lang, rate, opts = {}) {
+    return new Promise(resolve => {
+      try {
+        if (!canSpeak || !text) return resolve(false);
+        if (!opts.queue) { window.speechSynthesis.cancel(); }
+        const token = ++speakToken;
+        const persona = PERSONAS[opts.persona || VOICE.persona] || PERSONAS.female;
+        const tags = opts.native ? (NATIVE_VOICE[opts.native] || [opts.native]) : [VOICE_FOR[lang] || lang];
+        const voice = pickVoice(tags, persona.id, opts.native ? '' : VOICE.deviceVoice);
+        const u = new SpeechSynthesisUtterance(text);
+        if (voice) u.voice = voice;
+        u.lang = voice ? voice.lang : tags[0];
+        u.rate = Math.max(0.1, Math.min(2, (rate || 1) * persona.pace));
+        // Lower the pitch further when a male persona falls back to a non-male voice.
+        const fallback = persona.id === 'male' && voice && !PERSONAS.male.hints.test(voice.name);
+        u.pitch = fallback ? 0.68 : persona.pitch;
+        let done = false;
+        const finish = ok => { if (!done) { done = true; resolve(ok && token === speakToken); } };
+        u.onend = () => finish(true);
+        u.onerror = () => finish(false);
+        if (opts.onBoundary) u.onboundary = opts.onBoundary;
+        window.speechSynthesis.speak(u);
+        // Safety net: some browsers never fire onend.
+        setTimeout(() => finish(true), Math.max(2500, text.length * 260 / Math.max(0.3, u.rate)));
+      } catch { resolve(false); }
+    });
+  }
+  function stopSpeaking() { speakToken++; try { if (canSpeak) window.speechSynthesis.cancel(); } catch { /* ignore */ } }
+  const wait = ms => new Promise(r => setTimeout(r, ms));
 
   const today = () => new Date().toISOString().slice(0, 10);
   const yesterday = () => new Date(Date.now() - 864e5).toISOString().slice(0, 10);
@@ -830,12 +940,195 @@
 
   function SpeedControl({ speed, setSpeed }) {
     return html`
-      <div className="flex rounded-lg border border-line p-0.5 text-xs font-semibold" role="group" aria-label="Velocidad de la voz">
+      <div className="grid w-full grid-cols-4 gap-0.5 rounded-xl border border-line p-0.5" role="group" aria-label="Velocidad de la voz">
         ${SPEEDS.map(s => html`
-          <button key=${s} type="button" onClick=${() => setSpeed(s)} aria-pressed=${speed === s}
-            className=${'tnum rounded-md px-2.5 py-1.5 transition ' + (speed === s ? 'bg-raised text-fg' : 'text-muted hover:text-fg')}>
-            ${String(s).replace('.', ',')}×
+          <button key=${s.rate} type="button" onClick=${() => setSpeed(s.rate)} aria-pressed=${speed === s.rate}
+            className=${'flex min-h-[40px] flex-col items-center justify-center rounded-[10px] px-1 py-1 text-center text-[12px] font-semibold leading-tight transition ' + (speed === s.rate ? 'bg-raised text-fg' : 'text-muted hover:text-fg')}>
+            ${s.label}
           </button>`)}
+      </div>`;
+  }
+
+  function Switch({ id, checked, onChange, label, hint }) {
+    return html`
+      <label htmlFor=${id} className="flex cursor-pointer items-center justify-between gap-4">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-sm font-semibold text-fg">${label}</span>
+          ${hint && html`<span className="text-xs leading-snug text-muted">${hint}</span>`}
+        </span>
+        <span className="relative inline-flex shrink-0">
+          <input id=${id} type="checkbox" role="switch" checked=${checked} onChange=${e => onChange(e.target.checked)} className="peer sr-only" />
+          <span className=${'h-7 w-12 rounded-full border transition ' + (checked ? 'border-accent bg-accent' : 'border-line bg-raised')}></span>
+          <span className=${'absolute top-1 h-5 w-5 rounded-full transition-all ' + (checked ? 'left-6 bg-ink' : 'left-1 bg-muted')}></span>
+        </span>
+      </label>`;
+  }
+
+  const VOICE_SAMPLE = {
+    en: name => `Hi, I'm ${name}. Let's read together, one word at a time.`,
+    fr: name => `Bonjour, je m'appelle ${name}. Lisons ensemble, mot à mot.`
+  };
+
+  function VoiceCards({ value, onChange, lang }) {
+    const voices = useVoices();
+    return html`
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        ${Object.values(PERSONAS).map(p => {
+          const active = value === p.id;
+          const device = pickVoice([VOICE_FOR[lang] || lang], p.id, '');
+          return html`
+            <div key=${p.id} className=${'flex flex-col gap-3 rounded-2xl border p-4 transition ' + (active ? 'border-accent bg-soft' : 'border-line bg-surface')}>
+              <button type="button" onClick=${() => onChange(p.id)} aria-pressed=${active} className="flex items-start gap-3 text-left">
+                <span className=${'grid h-11 w-11 shrink-0 place-items-center rounded-full font-read text-lg font-semibold ' + (active ? 'bg-accent text-ink' : 'bg-raised text-fg')}>${p.name.slice(0, 1)}</span>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="flex items-center gap-2"><span className="font-semibold text-fg">${p.name}</span><span className="text-xs text-muted">${p.gender}</span></span>
+                  <span className="text-sm leading-snug text-muted">${p.traits}</span>
+                </span>
+              </button>
+              <button type="button" onClick=${() => { onChange(p.id); speak((VOICE_SAMPLE[lang] || VOICE_SAMPLE.en)(p.name), lang, 1, { persona: p.id }); }}
+                className="flex h-10 items-center justify-center gap-2 rounded-xl border border-line text-sm font-semibold text-fg transition hover:border-accent hover:text-accent">
+                <${Icon} d=${I.speaker} size=${16} /> Escuchar a ${p.name}
+              </button>
+              ${voices.length > 0 && html`<span className="truncate text-[11px] text-muted">En este dispositivo: ${device ? device.name : 'voz del sistema'}</span>`}
+            </div>`;
+        })}
+      </div>`;
+  }
+
+  function AudioSettings({ prefs, setPrefs, lang, onClose }) {
+    const voices = useVoices();
+    const tags = [VOICE_FOR[lang] || lang];
+    const options = voices.filter(v => (v.lang || '').toLowerCase().startsWith(tags[0].slice(0, 2).toLowerCase()));
+    const ios = /iPad|iPhone|Macintosh/.test(navigator.userAgent);
+    return html`
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-2">
+          <span className="eyebrow">Tu voz guía</span>
+          <${VoiceCards} value=${prefs.voice} onChange=${v => setPrefs({ ...prefs, voice: v, deviceVoice: '' })} lang=${lang} />
+        </div>
+        <div className="flex flex-col gap-2">
+          <span className="eyebrow">Velocidad</span>
+          <${SpeedControl} speed=${prefs.speed} setSpeed=${s => setPrefs({ ...prefs, speed: s })} />
+        </div>
+        <div className="border-y border-line py-4">
+          <${Switch} id="pref-autoplay" checked=${!!prefs.autoplay} onChange=${v => setPrefs({ ...prefs, autoplay: v })}
+            label="Sonido al tocar una palabra" hint="Desactivado, la palabra solo suena cuando pulsas «Escuchar»." />
+        </div>
+        ${options.length > 1 && html`
+          <label htmlFor="pref-device-voice" className="flex flex-col gap-1.5">
+            <span className="text-sm font-semibold text-fg">Voz del dispositivo (avanzado)</span>
+            <select id="pref-device-voice" value=${prefs.deviceVoice || ''} onChange=${e => setPrefs({ ...prefs, deviceVoice: e.target.value })}
+              className="h-11 rounded-xl border border-line bg-bg px-3 text-sm text-fg">
+              <option value="">Automática (la mejor para ${PERSONAS[prefs.voice] ? PERSONAS[prefs.voice].name : 'tu voz'})</option>
+              ${options.map(v => html`<option key=${v.name} value=${v.name}>${v.name} · ${v.lang}</option>`)}
+            </select>
+          </label>`}
+        ${ios && html`
+          <p className="rounded-xl bg-raised px-3.5 py-3 text-xs leading-relaxed text-muted">
+            <span className="font-semibold text-fg">Consejo para iPad y iPhone:</span> para una voz mucho más natural, descarga una voz mejorada en Ajustes → Accesibilidad → Contenido leído → Voces → Inglés. Por ejemplo, «Evan (mejorada)» o «Ava (premium)». Simart la elegirá sola.
+          </p>`}
+        ${onClose && html`<button type="button" onClick=${onClose} className="h-11 rounded-xl bg-accent text-sm font-semibold text-ink">Listo</button>`}
+      </div>`;
+  }
+
+  /* ================================================================== *
+   * Syllable-by-syllable pronunciation guide
+   * ================================================================== */
+  function SyllableGuide({ ipa, word, nativeKey, lang, speed, nativeName }) {
+    const r = useMemo(() => respell(ipa, nativeKey, lang), [ipa, nativeKey, lang]);
+    const [active, setActive] = useState(-1);
+    const [running, setRunning] = useState(false);
+    const [phase, setPhase] = useState('');
+    const runId = useRef(0);
+    useEffect(() => () => { runId.current++; stopSpeaking(); }, [ipa]);
+    if (!r) return null;
+    const syl = r.words.flatMap((w, wi) => w.map((s, si) => ({ ...s, wordStart: wi > 0 && si === 0 })));
+    const cur = active >= 0 ? syl[active] : null;
+
+    const sayNative = s => speak(s.text, lang, 0.8, { native: nativeKey });
+    const tapSyllable = i => {
+      runId.current++; setRunning(false); setPhase('');
+      setActive(i);
+      const s = syl[i];
+      if (s.hasForeign) speak(word, lang, 0.4); else sayNative(s);
+    };
+
+    const runGuide = async () => {
+      const id = ++runId.current;
+      setRunning(true);
+      for (let i = 0; i < syl.length; i++) {
+        if (runId.current !== id) return;
+        setActive(i); setPhase('syllable');
+        const s = syl[i];
+        if (s.hasForeign) { await wait(1800); }
+        else { const ok = await sayNative(s); if (!ok && runId.current !== id) return; await wait(380); }
+      }
+      if (runId.current !== id) return;
+      setActive(-1); setPhase('slow');
+      await speak(word, lang, 0.4);
+      if (runId.current !== id) return;
+      await wait(450);
+      setPhase('normal');
+      await speak(word, lang, speed);
+      if (runId.current !== id) return;
+      setPhase(''); setRunning(false);
+    };
+    const stop = () => { runId.current++; stopSpeaking(); setRunning(false); setPhase(''); };
+
+    return html`
+      <div className="flex flex-col gap-4 rounded-2xl border border-line p-4">
+        <div className="flex items-center justify-between gap-2">
+          <span className="eyebrow">Pronunciación paso a paso</span>
+          <span className="text-[11px] font-semibold text-muted">${NATIVE_LABEL[nativeKey] || nativeName}</span>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-1.5" role="list" aria-label="Sílabas">
+          ${syl.map((s, i) => html`
+            <button key=${i} type="button" role="listitem" onClick=${() => tapSyllable(i)}
+              aria-label=${`Sílaba ${i + 1}: ${s.text}${s.stressed ? ', fuerte' : ''}`}
+              className=${'flex min-h-[56px] min-w-[52px] flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 transition ' + (s.wordStart ? 'ml-3 ' : '') +
+                (active === i ? 'border-accent bg-accent text-ink' : 'border-line bg-raised text-fg hover:border-muted')}>
+              <span className=${'font-read text-xl leading-none ' + (s.stressed ? 'font-semibold' : '')}>${s.parts.map((p, pi) =>
+                p.mark ? html`<span key=${pi} className=${active === i ? 'underline decoration-wavy underline-offset-4' : 'mark-sound'}>${p.t}</span>` : p.t)}</span>
+              <span className=${'h-1 w-5 rounded-full ' + (s.stressed ? (active === i ? 'bg-ink' : 'bg-accent') : 'bg-transparent')}></span>
+            </button>`)}
+        </div>
+
+        <div className="min-h-[72px] rounded-xl bg-raised px-3.5 py-3" aria-live="polite">
+          ${cur ? html`
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-muted">Sílaba ${active + 1} de ${syl.length}${cur.stressed ? ' · fuerte, dila con más energía' : ''}</span>
+              ${cur.hasForeign
+                ? html`<span className="text-sm text-fg">Este sonido no existe en tu idioma. Fíjate en el gesto:</span>`
+                : html`<span className="text-sm text-fg">Di como en tu idioma: <span className="font-read text-lg font-semibold text-accent">«${cur.text}»</span></span>`}
+              ${cur.tips.map(t => html`<span key=${t.ipa} className="text-sm leading-relaxed text-muted"><span className="font-mono text-xs text-accent">/${t.ipa}/</span> ${t.text}</span>`)}
+              ${!cur.hasForeign && cur.tips.length === 0 && html`<span className="text-xs text-muted">Suena igual que en tu idioma.</span>`}
+            </div>` : phase === 'slow' ? html`
+            <span className="text-sm text-fg">Ahora la palabra entera, <span className="font-semibold text-accent">súper lento</span>…</span>` : phase === 'normal' ? html`
+            <span className="text-sm text-fg">Y a tu velocidad. <span className="font-semibold text-accent">Repítela en voz alta.</span></span>` : html`
+            <span className="text-sm leading-relaxed text-muted">Pulsa «Guía completa»: te digo cada sílaba con un sonido de tu idioma y al final la palabra en ${langName(lang).toLowerCase()}. También puedes tocar una sílaba suelta.</span>`}
+        </div>
+
+        ${!cur && !running && r.tips.length > 0 && html`
+          <ul className="flex flex-col gap-2">
+            ${r.tips.map(t => html`
+              <li key=${t.ipa} className="flex gap-3 text-sm leading-relaxed">
+                <span className="w-10 shrink-0 pt-px font-mono text-xs text-accent">/${t.ipa}/</span>
+                <span className="text-fg">${t.text}</span>
+              </li>`)}
+          </ul>`}
+
+        ${canSpeak && html`
+          <div className="flex gap-2">
+            <button type="button" onClick=${running ? stop : runGuide}
+              className=${'flex h-11 flex-1 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition ' + (running ? 'border border-accent text-accent' : 'bg-accent text-ink hover:brightness-110')}>
+              ${running ? html`<span className="h-3 w-3 rounded-sm bg-accent"></span> Detener` : html`<${Icon} d=${I.speaker} size=${16} /> Guía completa`}
+            </button>
+            <button type="button" onClick=${() => { stop(); speak(word, lang, 0.4); }}
+              className="flex h-11 items-center gap-2 rounded-xl border border-line px-3.5 text-sm font-semibold text-fg transition hover:border-muted" aria-label="Escuchar la palabra súper lento">
+              <${Icon} d=${I.slow} size=${16} /> Súper lento
+            </button>
+          </div>`}
       </div>`;
   }
 
@@ -866,10 +1159,10 @@
   /* ================================================================== *
    * Onboarding
    * ================================================================== */
-  function Onboarding({ initial, onDone, onCancel }) {
+  function Onboarding({ initial, onDone, onCancel, voice, onVoice }) {
     const [draft, setDraft] = useState(initial || { native: null, variant: null, target: null, level: 0 });
     const [step, setStep] = useState('native');
-    const steps = ['native', ...(draft.native === 'es' ? ['variant'] : []), 'target', 'level'];
+    const steps = ['native', ...(draft.native === 'es' ? ['variant'] : []), 'target', 'level', 'voice'];
     const idx = steps.indexOf(step);
     const next = () => setStep(steps[idx + 1]);
     const prev = () => (idx > 0 ? setStep(steps[idx - 1]) : onCancel && onCancel());
@@ -966,6 +1259,14 @@
                   </button>`)}
                 <p className="pt-1 text-sm text-muted">¿No lo sabes? Empieza en A1: los textos fáciles se leen rápido y suben tu XP enseguida.</p>
               </div>`}
+
+            ${step === 'voice' && html`
+              <div className="flex flex-col gap-2">
+                <h1 className="font-read text-[clamp(1.8rem,5vw,2.6rem)] font-semibold leading-tight">Elige la voz que te enseña</h1>
+                <p className="max-w-[56ch] text-muted">Te acompañará en cada palabra y en la guía de pronunciación. Escucha las dos y quédate con la que te resulte más agradable. Puedes cambiarla cuando quieras.</p>
+              </div>
+              <${VoiceCards} value=${voice} onChange=${onVoice} lang=${VOICE_SAMPLE[draft.target] ? draft.target : 'en'} />
+              <p className="text-sm text-muted">Por defecto, las palabras solo suenan cuando pulsas «Escuchar». Puedes cambiarlo en el botón de voz mientras lees.</p>`}
           </div>
         </div>
 
@@ -1180,88 +1481,86 @@
    * Word detail
    * ================================================================== */
   function WordDetail({ lang, selection, profile, prefs, setPrefs, decks, savedItem, onSave }) {
+    const [playing, setPlaying] = useState(null);
+    useEffect(() => () => stopSpeaking(), [selection && selection.id]);
     if (!selection) {
       return html`
-        <div className="flex h-full flex-col items-start justify-center gap-3 px-6 py-10">
+        <div className="flex h-full flex-col items-start justify-center gap-3 px-5 py-8">
           <span className="eyebrow">Diccionario contextual</span>
           <p className="font-read text-xl leading-snug text-fg">Toca cualquier palabra del texto.</p>
-          <p className="max-w-[34ch] text-sm leading-relaxed text-muted">Verás cómo suena en tu idioma, su traducción, la frase donde aparece, y podrás escucharla más despacio.</p>
+          <p className="max-w-[34ch] text-sm leading-relaxed text-muted">Verás cómo suena con los sonidos de tu idioma, su traducción y la frase donde aparece, sin perder tu lugar en el libro.</p>
         </div>`;
     }
     const entry = lookup(lang, selection.key);
     const nk = nativeKeyOf(profile);
     const sameLang = profile.native === lang;
-    const resp = entry && !sameLang ? respell(entry.ipa, nk, lang) : null;
     const rate = prefs.speed;
-    const contexts = [
-      { label: 'En este libro', src: selection.sentence, es: null },
-      entry && { label: 'Otro ejemplo', src: entry.exSrc, es: entry.exEs }
-    ].filter(Boolean);
+    const play = async (id, text, r) => {
+      if (playing === id) { stopSpeaking(); setPlaying(null); return; }
+      setPlaying(id);
+      await speak(text, lang, r);
+      setPlaying(p => (p === id ? null : p));
+    };
+    const SpeakBtn = ({ id, text, label, big }) => html`
+      <button type="button" onClick=${() => play(id, text, rate)} aria-label=${label}
+        className=${'grid shrink-0 place-items-center rounded-full transition ' + (big ? 'h-12 w-12 ' : 'h-9 w-9 ') +
+          (playing === id ? 'bg-accent text-ink' : big ? 'bg-raised text-fg hover:text-accent' : 'text-muted hover:bg-bg hover:text-accent')}>
+        ${playing === id ? html`<span className="h-3 w-3 rounded-sm bg-ink"></span>` : html`<${Icon} d=${I.speaker} size=${big ? 20 : 16} />`}
+      </button>`;
+    const term = selection.surface.length > 1 ? selection.surface : selection.key;
 
     return html`
-      <div key=${selection.id} className="rise flex flex-col gap-6 px-6 pb-8 pt-6">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            ${entry ? html`<${Chip}>${entry.pos}<//>` : html`<${Chip}>sin entrada<//>`}
-            ${entry && entry.cefr !== '—' && html`<${Chip} tone="accent">Nivel ${entry.cefr}<//>`}
+      <div key=${selection.id} className="rise flex flex-col gap-5 px-5 pb-8 pt-4">
+        <div className="flex items-start gap-3">
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h2 className="min-w-0 break-words font-read text-[2.1rem] font-semibold leading-none text-fg">${selection.key}</h2>
+              ${entry && html`<span className="font-mono text-sm text-muted">/${entry.ipa}/</span>`}
+            </div>
+            <p className="font-read text-xl leading-snug text-accent">${entry ? entry.translation : 'Sin entrada en el diccionario de la demo'}</p>
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              ${entry ? html`<${Chip}>${entry.pos}<//>` : html`<${Chip}>sin entrada<//>`}
+              ${entry && entry.cefr !== '—' && html`<${Chip} tone="accent">Nivel ${entry.cefr}<//>`}
+              ${selection.surface.toLowerCase() !== selection.key && html`<${Chip}>en el texto: ${selection.surface}<//>`}
+            </div>
           </div>
-          <h2 className="min-w-0 break-words font-read text-[2.4rem] font-semibold leading-none text-fg">${selection.key}</h2>
-          ${entry && html`<p className="font-mono text-sm text-muted">/${entry.ipa}/</p>`}
-          ${selection.surface.toLowerCase() !== selection.key && html`
-            <p className="text-xs text-muted">Forma en el texto: <span className="font-mono text-fg">${selection.surface}</span></p>`}
+          ${canSpeak && html`<${SpeakBtn} id="word" text=${selection.key} label=${'Escuchar ' + selection.key} big=${true} />`}
         </div>
 
-        ${canSpeak && html`
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick=${() => speak(selection.key, lang, rate)}
-              className="flex h-11 items-center gap-2 rounded-xl bg-raised px-4 text-sm font-semibold text-fg transition hover:text-accent" aria-label=${'Escuchar ' + selection.key}>
-              <${Icon} d=${I.speaker} /> Escuchar
-            </button>
-            <button type="button" onClick=${() => speak(selection.key, lang, 0.45)}
-              className="flex h-11 items-center gap-2 rounded-xl border border-line px-3 text-sm font-semibold text-muted transition hover:text-fg" aria-label="Escuchar muy despacio">
-              <${Icon} d=${I.slow} /> Lento
-            </button>
-            <${SpeedControl} speed=${prefs.speed} setSpeed=${s => setPrefs({ ...prefs, speed: s })} />
-          </div>`}
+        ${canSpeak && html`<${SpeedControl} speed=${prefs.speed} setSpeed=${s => setPrefs({ ...prefs, speed: s })} />`}
 
         ${entry && !sameLang && html`
-          <div className="flex flex-col gap-3 rounded-2xl border border-line p-4">
-            <div className="flex items-center justify-between gap-2">
-              <span className="eyebrow">Cómo suena para ti</span>
-              <span className="text-[11px] font-semibold text-muted">${NATIVE_LABEL[nk] || langName(profile.native)}</span>
-            </div>
-            ${resp ? html`
-              <${Respelling} ipa=${entry.ipa} nativeKey=${nk} targetLang=${lang} />
-              <p className="text-xs text-muted">Lee en voz alta como en tu idioma. La sílaba subrayada es la fuerte.</p>
-              ${resp.tips.length > 0 && html`
-                <ul className="flex flex-col gap-2 border-t border-line pt-3">
-                  ${resp.tips.map(t => html`
-                    <li key=${t.ipa} className="flex gap-3 text-sm leading-relaxed">
-                      <span className="w-10 shrink-0 pt-px font-mono text-xs text-accent">/${t.ipa}/</span>
-                      <span className="text-fg">${t.text}</span>
-                    </li>`)}
-                </ul>`}` : html`
-              <p className="text-sm text-muted">Aún no tenemos transcripción adaptada para ${langName(profile.native).toLowerCase()}. Usa la fonética IPA y el audio.</p>`}
-          </div>`}
+          <${SyllableGuide} ipa=${entry.ipa} word=${selection.key} nativeKey=${nk} lang=${lang} speed=${rate} nativeName=${langName(profile.native)} />`}
 
-        <div className="flex flex-col gap-2 border-y border-line py-5">
-          <span className="eyebrow">Traducción</span>
-          <p className="font-read text-2xl leading-snug text-accent">${entry ? entry.translation : 'Sin entrada en el diccionario de la demo'}</p>
-          ${entry && entry.note && html`<p className="text-sm leading-relaxed text-muted">${entry.note}</p>`}
-          ${profile.native !== 'es' && html`<p className="text-xs text-muted">En la demo las traducciones están en español. La versión final las mostrará en ${langName(profile.native).toLowerCase()}.</p>`}
-        </div>
+        ${entry && entry.note && html`
+          <p className="rounded-xl bg-raised px-3.5 py-3 text-sm leading-relaxed text-fg"><span className="font-semibold text-accent">Ojo: </span>${entry.note}</p>`}
 
         <div className="flex flex-col gap-3">
-          <span className="eyebrow">Contexto</span>
-          ${contexts.map((c, i) => html`
-            <figure key=${i} className="flex flex-col gap-1.5 rounded-xl bg-raised p-4">
-              <figcaption className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
-                ${c.label}
-                ${canSpeak && html`<button type="button" onClick=${() => speak(c.src, lang, rate)} className="grid h-8 w-8 place-items-center rounded-lg normal-case text-muted transition hover:text-accent" aria-label="Escuchar frase"><${Icon} d=${I.speaker} size=${16} /></button>`}
-              </figcaption>
-              <blockquote className="font-read text-[15px] leading-relaxed text-fg"><${Highlight} text=${c.src} term=${selection.surface.length > 1 ? selection.surface : selection.key} /></blockquote>
-              ${c.es && html`<p className="text-sm text-muted">${c.es}</p>`}
-            </figure>`)}
+          <span className="eyebrow">En el libro</span>
+          <figure className="flex flex-col gap-2 rounded-xl bg-raised p-4">
+            <blockquote className="font-read text-[15px] leading-relaxed">
+              ${selection.prev && html`<span className="text-muted">${selection.prev} </span>`}
+              <span className="text-fg"><${Highlight} text=${selection.sentence} term=${term} /></span>
+              ${selection.next && html`<span className="text-muted"> ${selection.next}</span>`}
+            </blockquote>
+            ${canSpeak && html`
+              <div className="flex items-center gap-1 border-t border-line pt-2">
+                <${SpeakBtn} id="ctx" text=${selection.sentence} label="Escuchar la frase" />
+                <span className="text-xs text-muted">Escuchar la frase</span>
+              </div>`}
+          </figure>
+          ${entry && html`
+            <span className="eyebrow pt-1">Otro ejemplo</span>
+            <figure className="flex flex-col gap-2 rounded-xl bg-raised p-4">
+              <blockquote className="font-read text-[15px] leading-relaxed text-fg"><${Highlight} text=${entry.exSrc} term=${term} /></blockquote>
+              <p className="text-sm text-muted">${entry.exEs}</p>
+              ${canSpeak && html`
+                <div className="flex items-center gap-1 border-t border-line pt-2">
+                  <${SpeakBtn} id="ex" text=${entry.exSrc} label="Escuchar el ejemplo" />
+                  <span className="text-xs text-muted">Escuchar el ejemplo</span>
+                </div>`}
+            </figure>`}
+          ${profile.native !== 'es' && html`<p className="text-xs text-muted">En la demo las traducciones están en español. La versión final las mostrará en ${langName(profile.native).toLowerCase()}.</p>`}
         </div>
 
         <div className="flex flex-col gap-3">
@@ -1375,10 +1674,10 @@
   /* ================================================================== *
    * Panel shell & hosts
    * ================================================================== */
-  function PanelShell({ tabs, tab, setTab, onClose, children }) {
+  function PanelShell({ tabs, tab, setTab, onClose, children, expanded, onToggleSize }) {
     return html`
       <div className="flex h-full flex-col bg-surface">
-        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <div className="flex items-center gap-2 border-b border-line px-3 py-2.5">
           ${tabs.length > 1 ? html`
             <div className="flex flex-1 rounded-xl bg-bg p-1 text-sm font-semibold" role="tablist">
               ${tabs.map(t => html`
@@ -1387,6 +1686,11 @@
                   ${t.label}${t.count != null && html`<span className="tnum rounded-full bg-soft px-1.5 text-[11px] text-accent">${t.count}</span>`}
                 </button>`)}
             </div>` : html`<span className="flex-1 px-1 font-semibold">${tabs[0].label}</span>`}
+          ${onToggleSize && html`
+            <button type="button" onClick=${onToggleSize} aria-label=${expanded ? 'Reducir panel' : 'Ampliar panel'}
+              className="grid h-10 w-10 place-items-center rounded-xl text-muted transition hover:bg-raised hover:text-fg lg:hidden">
+              <span className=${'inline-block transition-transform ' + (expanded ? '-rotate-90' : 'rotate-90')}><${Icon} d=${I.back} /></span>
+            </button>`}
           <button type="button" onClick=${onClose} aria-label="Cerrar panel"
             className="grid h-10 w-10 place-items-center rounded-xl text-muted transition hover:bg-raised hover:text-fg"><${Icon} d=${I.close} /></button>
         </div>
@@ -1407,6 +1711,53 @@
       </section>`;
   }
 
+  function useMedia(query) {
+    const get = () => { try { return window.matchMedia(query).matches; } catch { return false; } };
+    const [match, setMatch] = useState(get);
+    useEffect(() => {
+      let mq; try { mq = window.matchMedia(query); } catch { return; }
+      const on = () => setMatch(mq.matches);
+      on();
+      mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener(on);
+      return () => (mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener(on));
+    }, [query]);
+    return match;
+  }
+
+  /** Bottom dock for phones and iPad portrait: no dim overlay, the book stays readable and tappable above it. */
+  function ReaderDock({ open, expanded, onToggleSize, children }) {
+    return html`
+      <section className=${'sheet fixed inset-x-0 bottom-0 z-40 mx-auto flex max-w-2xl flex-col overflow-hidden rounded-t-[22px] border border-b-0 border-line bg-surface shadow-[0_-12px_40px_rgba(0,0,0,0.45)] lg:hidden ' +
+          (open ? 'translate-y-0' : 'translate-y-[105%]')}
+        style=${{ height: expanded ? DOCK_FULL : DOCK_PEEK, transition: 'transform .38s cubic-bezier(.2,.8,.2,1), height .32s cubic-bezier(.2,.8,.2,1)', paddingBottom: 'env(safe-area-inset-bottom, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}
+        aria-hidden=${!open} aria-label="Detalle de la palabra">
+        <button type="button" onClick=${onToggleSize} className="flex h-5 shrink-0 items-center justify-center" aria-label=${expanded ? 'Reducir panel' : 'Ampliar panel'}>
+          <span className="h-1 w-10 rounded-full bg-line"></span>
+        </button>
+        <div className="min-h-0 flex-1">${children}</div>
+      </section>`;
+  }
+  const DOCK_PEEK = '46dvh';
+  const DOCK_FULL = '86dvh';
+
+  function Popover({ open, onClose, children, label }) {
+    const ref = useRef(null);
+    useEffect(() => {
+      if (!open) return;
+      const close = e => { if (ref.current && !ref.current.contains(e.target) && !e.target.closest('[data-popover-trigger]')) onClose(); };
+      const esc = e => { if (e.key === 'Escape') onClose(); };
+      document.addEventListener('pointerdown', close);
+      document.addEventListener('keydown', esc);
+      return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', esc); };
+    }, [open]);
+    if (!open) return null;
+    return html`
+      <div ref=${ref} role="dialog" aria-label=${label}
+        className="rise scroll-thin fixed right-[max(16px,env(safe-area-inset-right,0px))] top-[calc(64px+env(safe-area-inset-top,0px))] z-50 max-h-[78dvh] w-[min(420px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-line bg-surface p-4 shadow-2xl">
+        ${children}
+      </div>`;
+  }
+
   /* ================================================================== *
    * Reader
    * ================================================================== */
@@ -1416,10 +1767,31 @@
     const lang = book.lang;
     const [selection, setSelection] = useState(null);
     const [panelOpen, setPanelOpen] = useState(false);
+    const [dockFull, setDockFull] = useState(false);
+    const [audioOpen, setAudioOpen] = useState(false);
+    const wide = useMedia('(min-width: 1024px)');
     const [tab, setTab] = useState('word');
     const [progress, setProgress] = useState(0);
     const scrollRef = useRef(null);
     const parsed = useMemo(() => parseBook(book.paragraphs), [book]);
+    const flat = useMemo(() => parsed.paragraphs.flatMap((p, pi) => p.map((s, si) => ({ pi, si, text: s.text }))), [parsed]);
+
+    /** Keeps the tapped word visible above the dock (phones) or next to the side panel (iPad landscape). */
+    const revealWord = useCallback(id => {
+      const run = () => {
+        const main = scrollRef.current;
+        const el = main && main.querySelector(`[data-wid="${id}"]`);
+        if (!el) return;
+        const wide = window.matchMedia('(min-width: 1024px)').matches;
+        const top = el.getBoundingClientRect().top - main.getBoundingClientRect().top;
+        const visible = wide ? main.clientHeight : main.clientHeight - window.innerHeight * 0.46;
+        if (top < 24 || top > visible - 48) {
+          const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          main.scrollTo({ top: Math.max(0, main.scrollTop + top - Math.max(60, visible * 0.32)), behavior: reduce ? 'auto' : 'smooth' });
+        }
+      };
+      setTimeout(run, 80);
+    }, []);
     const uniqueKeys = useMemo(() => {
       const s = new Set();
       parsed.paragraphs.forEach(p => p.forEach(sn => sn.tokens.forEach(t => t.type === 'word' && s.add(toKey(t.text, lang)))));
@@ -1445,11 +1817,18 @@
       return () => window.removeEventListener('keydown', onKey);
     }, []);
 
-    const selectWord = (token, sentence) => {
+    const selectWord = (token, pi, si) => {
       const key = toKey(token.text, lang);
-      setSelection({ id: token.id, key, surface: token.text, sentence });
+      const idx = flat.findIndex(f => f.pi === pi && f.si === si);
+      const sameParagraph = j => flat[j] && flat[j].pi === pi;
+      setSelection({
+        id: token.id, key, surface: token.text, sentence: flat[idx].text,
+        prev: sameParagraph(idx - 1) ? flat[idx - 1].text : '',
+        next: sameParagraph(idx + 1) ? flat[idx + 1].text : ''
+      });
       setTab('word');
       setPanelOpen(true);
+      revealWord(token.id);
       if (prefs.autoplay) speak(key, lang, prefs.speed);
       const lk = `${lang}:${key}`;
       if (!looked.includes(lk) && lookup(lang, key)) { setLooked([...looked, lk]); award(2, 'palabra nueva'); }
@@ -1485,7 +1864,8 @@
     const lvl = LEVELS[meta.level];
 
     const panel = html`
-      <${PanelShell} tabs=${[{ id: 'word', label: 'Palabra' }, { id: 'vocab', label: 'Vocabulario', count: vocab.length }]} tab=${tab} setTab=${setTab} onClose=${() => setPanelOpen(false)}>
+      <${PanelShell} tabs=${[{ id: 'word', label: 'Palabra' }, { id: 'vocab', label: 'Vocabulario', count: vocab.length }]} tab=${tab} setTab=${setTab}
+        onClose=${() => { stopSpeaking(); setPanelOpen(false); setDockFull(false); }} expanded=${dockFull} onToggleSize=${() => setDockFull(!dockFull)}>
         ${tab === 'word'
           ? html`<${WordDetail} lang=${lang} selection=${selection} profile=${profile} prefs=${prefs} setPrefs=${setPrefs} decks=${decks} savedItem=${savedItem} onSave=${onSave} />`
           : html`<${VocabPanel} vocab=${vocab} setVocab=${setVocab} decks=${decks} setDecks=${setDecks} profile=${profile} rate=${prefs.speed} onOpen=${openFromVocab} />`}
@@ -1519,10 +1899,11 @@
                 <button type="button" onClick=${() => setPrefs({ ...prefs, size: Math.min(SIZES.length - 1, prefs.size + 1) })} disabled=${prefs.size === SIZES.length - 1}
                   className="h-full px-3 font-read text-lg leading-none text-fg transition hover:text-accent disabled:opacity-30" aria-label="Aumentar letra">A</button>
               </div>
-              <button type="button" onClick=${() => setPrefs({ ...prefs, autoplay: !prefs.autoplay })} aria-pressed=${prefs.autoplay}
-                title=${prefs.autoplay ? 'Sonido al tocar: activado' : 'Sonido al tocar: desactivado'}
-                className=${'grid h-10 w-10 place-items-center rounded-xl border transition ' + (prefs.autoplay ? 'border-accent bg-soft text-accent' : 'border-line bg-surface text-muted')}
-                aria-label="Reproducir sonido al tocar una palabra"><${Icon} d=${I.speaker} size=${17} /></button>
+              <button type="button" data-popover-trigger="" onClick=${() => setAudioOpen(!audioOpen)} aria-expanded=${audioOpen}
+                className=${'flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ' + (audioOpen ? 'border-accent bg-soft text-accent' : 'border-line bg-surface text-fg hover:border-muted')}
+                aria-label="Voz y audio">
+                <${Icon} d=${I.speaker} size=${17} /><span className="hidden sm:inline">${(PERSONAS[prefs.voice] || PERSONAS.female).name}</span>
+              </button>
               <button type="button" onClick=${toggleVocab} aria-pressed=${panelOpen && tab === 'vocab'}
                 className=${'flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ' +
                   (panelOpen && tab === 'vocab' ? 'border-accent bg-soft text-accent' : 'border-line bg-surface text-fg hover:border-muted')}>
@@ -1545,14 +1926,14 @@
               <div className="prose-reader flex flex-col text-fg" style=${{ fontSize: SIZES[prefs.size] + 'px' }} lang=${lang}>
                 ${parsed.paragraphs.map((sentences, pi) => html`
                   <p key=${pi}>
-                    ${sentences.map(s => s.tokens.map(t => {
+                    ${sentences.map((s, si) => s.tokens.map(t => {
                       if (t.type === 'gap') return t.text;
                       const k = toKey(t.text, lang);
                       const isSel = selection && selection.id === t.id;
                       const cls = ['word', isSel && 'is-selected', !isSel && selection && selection.key === k && 'is-match', savedKeys.has(k) && 'is-saved'].filter(Boolean).join(' ');
-                      return html`<span key=${t.id} role="button" tabIndex="0" className=${cls}
-                        onClick=${() => selectWord(t, s.text)}
-                        onKeyDown=${e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectWord(t, s.text); } }}>${t.text}</span>`;
+                      return html`<span key=${t.id} data-wid=${t.id} role="button" tabIndex="0" className=${cls}
+                        onClick=${() => selectWord(t, pi, si)}
+                        onKeyDown=${e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectWord(t, pi, si); } }}>${t.text}</span>`;
                     }))}
                   </p>`)}
               </div>
@@ -1571,15 +1952,20 @@
                   ${isDone ? html`<${Icon} d=${I.check} /> Capítulo completado` : `Marcar capítulo como leído · +${challenge ? 60 : 40} XP`}
                 </button>
               </footer>
+              ${panelOpen && html`<div className="lg:hidden" style=${{ height: dockFull ? DOCK_FULL : DOCK_PEEK }} aria-hidden="true"></div>`}
             </article>
           </main>
 
           <aside className="side hidden shrink-0 overflow-hidden border-l border-line lg:block" style=${{ width: panelOpen ? 400 : 0, borderLeftWidth: panelOpen ? 1 : 0 }} aria-hidden=${!panelOpen}>
-            <div className="h-full w-[400px]">${panel}</div>
+            <div className="h-full w-[400px]">${wide ? panel : null}</div>
           </aside>
         </div>
 
-        <${BottomSheet} open=${panelOpen} onClose=${() => setPanelOpen(false)}>${panel}<//>
+        <${ReaderDock} open=${panelOpen} expanded=${dockFull} onToggleSize=${() => setDockFull(!dockFull)}>${wide ? null : panel}<//>
+
+        <${Popover} open=${audioOpen} onClose=${() => setAudioOpen(false)} label="Voz y audio">
+          <${AudioSettings} prefs=${prefs} setPrefs=${setPrefs} lang=${lang} onClose=${() => setAudioOpen(false)} />
+        <//>
       </div>`;
   }
 
@@ -1821,7 +2207,7 @@
     const [looked, setLooked] = usePersist(ns + 'looked', []);
     const [finished, setFinished] = usePersist(ns + 'finished', []);
     const [streak, setStreak] = usePersist(ns + 'streak', { days: 0, last: null });
-    const [prefs, setPrefs] = usePersist(ns + 'prefs', { speed: 1, autoplay: true, size: 1 });
+    const [prefs, setPrefs] = usePersist(ns + 'prefs', { v: 3, speed: 1, autoplay: false, size: 1, voice: 'female', deviceVoice: '' });
     const [vocabOpen, setVocabOpen] = useState(false);
     const [toast, setToast] = useState(null);
     const [sync, setSync] = useState(user ? 'loading' : 'local');
@@ -1857,7 +2243,7 @@
           let nextXp = row.xp || 0;
           let nextStreak = row.streak || { days: 0, last: null };
           let nextLooked = Array.isArray(row.looked) ? row.looked : [];
-          let nextPrefs = { speed: 1, autoplay: true, size: 1, ...(row.prefs || {}) };
+          let nextPrefs = { v: 3, speed: 1, autoplay: false, size: 1, voice: 'female', deviceVoice: '', ...(row.prefs || {}) };
 
           primeVocab(nextVocab); primeDecks(cloudDecks); primeFinished(nextFinished);
 
@@ -1908,6 +2294,13 @@
       return () => clearTimeout(t);
     }, [cloudOn, profile, xp, streak, looked, prefs]);
 
+    // Prefs v3: four speeds, Simart voices, sound only on demand.
+    useEffect(() => {
+      if (prefs.v === 3) return;
+      setPrefs({ ...prefs, v: 3, voice: prefs.voice || 'female', deviceVoice: prefs.deviceVoice || '', autoplay: false, speed: nearestSpeed(prefs.speed || 1) });
+    }, [prefs]);
+    setVoicePrefs(prefs);
+
     const rank = rankFor(profile, xp);
     const account = { guest: !user, username, email: user ? user.email : '' };
 
@@ -1940,6 +2333,7 @@
     let content;
     if (view === 'onboarding' || !profile) {
       content = html`<${Onboarding} initial=${profile} onCancel=${profile ? () => setView('library') : null}
+        voice=${prefs.voice || 'female'} onVoice=${v => setPrefs({ ...prefs, voice: v, deviceVoice: '' })}
         onDone=${p => { setProfile(p); setView('library'); }} />`;
     } else if (view === 'reader' && bookId) {
       content = html`<${Reader} bookId=${bookId} profile=${profile} prefs=${prefs} setPrefs=${setPrefs}

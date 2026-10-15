@@ -6,7 +6,10 @@ Aprendizaje de idiomas mediante la lectura inmersiva de libros. Pensado para iPa
 - **Cuentas de usuario:** registro con nombre de usuario, email y contraseña. El progreso se sincroniza entre dispositivos. También se puede usar sin cuenta (solo en el dispositivo).
 - **Onboarding:** idioma materno (con variante de español de España o Latinoamérica), idioma a aprender y nivel.
 - **Biblioteca por niveles A1–C2** como un juego: XP, rangos, racha diaria y libros de desafío.
-- **Toca una palabra:** traducción, fonética IPA, pronunciación adaptada a tu idioma materno, audio con velocidad ajustable y frases de contexto.
+- **Toca una palabra:** traducción, fonética IPA y frase del libro con la anterior y la siguiente. El panel no tapa el texto: en móvil y iPad vertical es una hoja compacta que se puede ampliar, y en iPad horizontal un panel lateral.
+- **Guía de pronunciación sílaba a sílaba:** cada sílaba suena con un sonido equivalente de tu idioma materno, con consejos para los sonidos que no existen en él, y al final la palabra completa súper lento y a tu velocidad.
+- **Voces de Simart:** Atlas (masculina, grave y cálida) y Vela (femenina, suave y clara), construidas sobre las mejores voces del dispositivo.
+- **Velocidades:** normal, lento medio, lento y súper lento. Por defecto el sonido solo se reproduce cuando el usuario lo pide.
 - **Inglés con acento americano** (voz en-US y fonética de EE. UU.).
 - **Vocabulario en secciones de práctica**, base del futuro juego de repaso.
 
