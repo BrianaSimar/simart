@@ -102,7 +102,9 @@
    * ------------------------------------------------------------------ */
   window.SIMART_CONFIG = {
     supabaseUrl: 'https://tkkemhiagdwutespinlo.supabase.co',
-    supabaseAnonKey: 'sb_publishable_xfwOoSdDjeAtzG4zmg3zvw_6HB7oLbm'
+    supabaseAnonKey: 'sb_publishable_xfwOoSdDjeAtzG4zmg3zvw_6HB7oLbm',
+    // Nombre de la función de voz en Supabase (Edge Functions)
+    voiceFunction: 'swift-endpoint'
   };
 </script>
 <script>
@@ -880,7 +882,7 @@
     const key = `${persona}|${accent}|${text}`;
     if (clipCache.has(key)) return clipCache.get(key);
     const cfg = window.SIMART_CONFIG || {};
-    const p = fetch(`${cfg.supabaseUrl}/functions/v1/tts`, {
+    const p = fetch(`${cfg.supabaseUrl}/functions/v1/${cfg.voiceFunction || 'tts'}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: cfg.supabaseAnonKey, Authorization: `Bearer ${cloudSession.access_token}` },
       body: JSON.stringify({ text, voice: persona, accent })
