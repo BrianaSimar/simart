@@ -7,8 +7,11 @@
 // - Proveedor: OpenAI (modelo gpt-4o-mini-tts), que acepta instrucciones
 //   de estilo para dar a cada voz su carácter.
 //
-// Secretos necesarios (Edge Functions → Secrets):
-//   OPENAI_API_KEY   tu clave de OpenAI
+// Secretos (Edge Functions → Secrets):
+//   OPENAI_API_KEY        tu clave de OpenAI (voces Atlas y Vela)
+//   ELEVENLABS_API_KEY    opcional: tu clave de ElevenLabs
+//   ELEVENLABS_VOICE_ID   opcional: el ID de tu voz clonada. Si están los
+//                         dos, la guía en español usa tu propia voz.
 // SUPABASE_URL, SUPABASE_ANON_KEY y SUPABASE_SERVICE_ROLE_KEY los pone
 // Supabase automáticamente.
 // =====================================================================
@@ -78,29 +81,49 @@ Deno.serve(async req => {
   const accent = ACCENTS[body.accent ?? ''] ? body.accent! : 'en';
   if (!text || text.length > 400) return json(400, { error: 'El texto debe tener entre 1 y 400 caracteres' });
 
+  // La guía en español (sílabas en la lengua materna) usa la voz clonada si está configurada.
+  const elKey = Deno.env.get('ELEVENLABS_API_KEY');
+  const elVoice = Deno.env.get('ELEVENLABS_VOICE_ID');
+  const useOwnVoice = !!(elKey && elVoice && accent.startsWith('es-'));
+
   // 3. Buscar en la caché.
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-  const key = `v1/${persona}/${accent}/${await sha256(text)}.mp3`;
+  const key = useOwnVoice
+    ? `v1/own-${elVoice}/${accent}/${await sha256(text)}.mp3`
+    : `v1/${persona}/${accent}/${await sha256(text)}.mp3`;
   const cached = await admin.storage.from('tts-cache').download(key);
   if (cached.data) {
     return new Response(cached.data, { headers: { ...CORS, 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' } });
   }
 
   // 4. Generar con IA.
-  const apiKey = Deno.env.get('OPENAI_API_KEY');
-  if (!apiKey) return json(500, { error: 'Falta el secreto OPENAI_API_KEY' });
-  const v = VOICES[persona];
-  const ai = await fetch('https://api.openai.com/v1/audio/speech', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini-tts',
-      voice: v.voice,
-      input: text,
-      instructions: `${v.style} ${ACCENTS[accent]}`,
-      response_format: 'mp3'
-    })
-  });
+  let ai: Response;
+  if (useOwnVoice) {
+    ai = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoice}?output_format=mp3_44100_128`, {
+      method: 'POST',
+      headers: { 'xi-api-key': elKey!, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+      body: JSON.stringify({
+        text,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: { stability: 0.55, similarity_boost: 0.85, style: 0.15, use_speaker_boost: true }
+      })
+    });
+  } else {
+    const apiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!apiKey) return json(500, { error: 'Falta el secreto OPENAI_API_KEY' });
+    const v = VOICES[persona];
+    ai = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini-tts',
+        voice: v.voice,
+        input: text,
+        instructions: `${v.style} ${ACCENTS[accent]}`,
+        response_format: 'mp3'
+      })
+    });
+  }
   if (!ai.ok) return json(502, { error: 'El servicio de voz no respondió', detail: (await ai.text()).slice(0, 300) });
   const audio = new Uint8Array(await ai.arrayBuffer());
 

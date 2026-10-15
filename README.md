@@ -33,6 +33,7 @@ La clave *anon* es pública por diseño: la seguridad la aplican las políticas 
 2. En Supabase, ve a **Edge Functions → Secrets** y añade `OPENAI_API_KEY` con tu clave.
 3. En **Edge Functions → Deploy a new function → Via Editor**, llama a la función `tts`, pega el contenido de `supabase/functions/tts/index.ts` y pulsa **Deploy**.
 4. Vuelve a ejecutar `supabase/schema.sql` en el SQL Editor (crea el bucket `tts-cache`).
+5. Opcional, voz propia para la guía en español: en **Edge Functions → Secrets** añade `ELEVENLABS_API_KEY` (tu clave de ElevenLabs, en *Profile → API Keys*) y `ELEVENLABS_VOICE_ID` (el ID de tu voz clonada, en *Voices → tu voz → Copy voice ID*). Las sílabas de la guía sonarán con esa voz; el inglés sigue con Atlas o Vela.
 
 La clave de OpenAI nunca llega al navegador: solo la usa la función en el servidor, y la función solo responde a usuarios con sesión iniciada.
 
